@@ -1,0 +1,30 @@
+name: Build-Test-Deploy
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "🔨 Baue die Anwendung ..."
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "🧹 Prüfe die Formatierung ..."
+
+  test:
+    runs-on: ubuntu-latest
+    needs: build                 # wartet auf build
+    steps:
+      - run: echo "🧪 Führe die Tests aus ..."
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: [lint, test]          # wartet auf lint UND test
+    steps:
+      - run: echo "🚀 Rolle die Anwendung aus ..."
