@@ -1,0 +1,22 @@
+name: Tests
+
+on:
+  push:
+    branches:
+      - "**"
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Code auschecken
+        uses: actions/checkout@v5
+
+      - name: Inhalt anzeigen
+        run: ls -la
+
+      - name: Tests ausführen
+        run: ./test.sh
