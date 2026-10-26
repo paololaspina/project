@@ -1,0 +1,22 @@
+name: Hallo Pipeline
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  hallo:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Begrüßung
+        run: echo "Hallo ${{ github.actor }}, die Pipeline läuft!"
+
+      - name: Wo bin ich eigentlich?
+        run: |
+          echo "Betriebssystem:"
+          cat /etc/os-release | head -2
+          echo "Benutzer: $(whoami)"
+          echo "Ordner:   $(pwd)"
+          echo "Inhalt:"
+          ls -la
