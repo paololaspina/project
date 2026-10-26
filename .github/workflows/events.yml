@@ -1,0 +1,21 @@
+name: Events verstehen
+
+on:
+  push:
+    branches:
+      - "**"            # alle Branches
+  pull_request:
+    branches:
+      - main            # PRs, die nach main gemergt werden sollen
+  workflow_dispatch:    # Knopf "Run workflow"
+
+jobs:
+  info:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Infos zum Auslöser
+        run: |
+          echo "Event:      ${{ github.event_name }}"
+          echo "Branch:     ${{ github.ref_name }}"
+          echo "Ausgelöst:  ${{ github.actor }}"
+          echo "Commit:     ${{ github.sha }}"
