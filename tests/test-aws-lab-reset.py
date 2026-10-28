@@ -265,5 +265,167 @@ echo UNSAFE_DEPLOY
         self.assertNotIn("UNSAFE_DEPLOY", output)
 
 
+    def mocked_account_check(self, account):
+        """Komplett isolierter --check mit vorgegebener AWS-Account-ID."""
+        with tempfile.TemporaryDirectory() as tmp:
+            fakebin = Path(tmp) / "bin"
+            fakebin.mkdir()
+
+            aws_mock = fakebin / "aws"
+            aws_mock.write_text("""#!/usr/bin/env bash
+case " $* " in
+  *" sts get-caller-identity "*)
+    echo "$MOCK_ACCOUNT" ;;
+  *" s3api head-bucket "*)
+    echo "$*" >> "$MOCK_LOG"
+    exit 0 ;;
+  *" ecr describe-repositories "*)
+    exit 0 ;;
+  *" ecr describe-images "*)
+    echo '{"imageDetails":[]}' ;;
+  *" iam get-role "*|*" iam get-open-id-connect-provider "*)
+    exit 0 ;;
+  *)
+    echo "UNERWARTETER AWS-AUFRUF: $*" >&2
+    exit 91 ;;
+esac
+""")
+            aws_mock.chmod(0o755)
+
+            git_mock = fakebin / "git"
+            git_mock.write_text("""#!/usr/bin/env bash
+case " $* " in
+  *" status "*)
+    exit 0 ;;
+  *" remote get-url "*)
+    echo git@github.com:paololaspina/project.git ;;
+  *)
+    echo "UNERWARTETER GIT-AUFRUF: $*" >&2
+    exit 92 ;;
+esac
+""")
+            git_mock.chmod(0o755)
+
+            log = Path(tmp) / "aws-calls.log"
+            log.touch()
+
+            env = os.environ.copy()
+            env["PATH"] = str(fakebin) + os.pathsep + env["PATH"]
+            env["MOCK_ACCOUNT"] = account
+            env["MOCK_LOG"] = str(log)
+
+            result = subprocess.run(
+                ["bash", str(SCRIPT), "--check"],
+                cwd=ROOT,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            return result, log.read_text()
+
+    def test_15_account_switch(self):
+        first, calls_first = self.mocked_account_check("111111111111")
+        second, calls_second = self.mocked_account_check("222222222222")
+
+        self.assertEqual(first.returncode, 0, first.stderr)
+        self.assertEqual(second.returncode, 0, second.stderr)
+
+        self.assertIn("cicd-terraform-state-111111111111", calls_first)
+        self.assertIn("cicd-terraform-state-222222222222", calls_second)
+        self.assertNotIn("111111111111", calls_second)
+
+    def test_16_repeated_check(self):
+        first, calls_first = self.mocked_account_check("123456789012")
+        second, calls_second = self.mocked_account_check("123456789012")
+
+        self.assertEqual(first.returncode, 0, first.stderr)
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertEqual(first.stdout, second.stdout)
+        self.assertEqual(calls_first, calls_second)
+
+
+    def simulated_restore(self, failure=""):
+        script = """
+source "$SCRIPT_UNDER_TEST" --help >/dev/null
+
+ACCOUNT=123456789012
+
+preflight(){ echo PREFLIGHT; }
+verify_git(){ echo VERIFY_GIT; }
+confirm(){ return 0; }
+ensure_bucket(){ echo S3; }
+ensure_ecr(){ echo ECR; }
+ensure_identity(){ echo IAM_OIDC; }
+prepare_configuration(){ echo CONFIG; }
+terraform_restore(){
+  echo TERRAFORM
+  [[ "$MOCK_FAILURE" != terraform ]]
+}
+sync_github(){
+  echo GIT_SYNC
+  [[ "$MOCK_FAILURE" != github ]]
+}
+run_pipeline(){
+  echo PIPELINE
+  [[ "$MOCK_FAILURE" != pipeline ]]
+}
+deploy_web(){ echo DEPLOY; }
+
+restore
+"""
+
+        env = os.environ.copy()
+        env["SCRIPT_UNDER_TEST"] = str(SCRIPT)
+        env["MOCK_FAILURE"] = failure
+
+        return subprocess.run(
+            ["bash", "-c", script],
+            cwd=ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+
+    def test_17_restore_sequence(self):
+        result = self.simulated_restore()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        expected = [
+            "PREFLIGHT",
+            "VERIFY_GIT",
+            "S3",
+            "ECR",
+            "IAM_OIDC",
+            "CONFIG",
+            "TERRAFORM",
+            "GIT_SYNC",
+            "PIPELINE",
+            "DEPLOY",
+        ]
+
+        output = result.stdout.splitlines()
+        positions = [output.index(item) for item in expected]
+
+        self.assertEqual(positions, sorted(positions))
+
+    def test_18_restore_failure_stops_following_steps(self):
+        for failure in ("terraform", "github", "pipeline"):
+            with self.subTest(failure=failure):
+                result = self.simulated_restore(failure)
+                output = result.stdout
+
+                self.assertNotEqual(result.returncode, 0, output)
+                self.assertNotIn("DEPLOY", output)
+
+                if failure == "terraform":
+                    self.assertNotIn("GIT_SYNC", output)
+                    self.assertNotIn("PIPELINE", output)
+
+                if failure == "github":
+                    self.assertNotIn("PIPELINE", output)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
