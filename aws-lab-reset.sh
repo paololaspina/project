@@ -141,6 +141,34 @@ terraform {
 BACKEND
   fi
   terraform -chdir="$TF_DIR" fmt -check >/dev/null || terraform -chdir="$TF_DIR" fmt
+  # Bei einem Account-Wechsel niemals alten lokalen State übernehmen.
+  local state_account_file="$TF_DIR/.last-aws-account"
+  if [[ -f "$state_account_file" ]]; then
+    local previous_account
+    previous_account=$(cat "$state_account_file")
+    if [[ "$previous_account" != "$ACCOUNT" ]]; then
+      log "AWS-Account-Wechsel erkannt: $previous_account -> $ACCOUNT"
+      echo "Terraform-Backend wird für den neuen Account neu konfiguriert."
+    fi
+  fi
+
+  # Lokale Terraform-State-Dateien dürfen nicht stillschweigend
+  # in eine neue AWS-Sandbox übernommen werden.
+  if [[ -s "$TF_DIR/terraform.tfstate" ]]; then
+    fail "Lokaler Terraform-State vorhanden. Bitte vor dem Restore prüfen."
+  fi
+
+  # Bereits vorhandenen Remote-State im Ziel-Account erkennen.
+  local bucket="cicd-terraform-state-$ACCOUNT"
+  local state_key="$BACKEND_KEY"
+
+  if awsx s3api head-object     --bucket "$bucket"     --key "$state_key" >/dev/null 2>&1; then
+    echo "Terraform-State im aktuellen AWS-Account vorhanden."
+  else
+    echo "Kein vorhandener Remote-State im Ziel-Bucket erkannt."
+    echo "Terraform wird eine neue Infrastruktur planen."
+  fi
+
   terraform -chdir="$TF_DIR" init -reconfigure -input=false
   terraform -chdir="$TF_DIR" validate
   terraform -chdir="$TF_DIR" plan -out=/tmp/cicd-lab-restore.tfplan -input=false
@@ -255,6 +283,48 @@ deploy_web(){
 }
 
 
+
+sync_github(){
+  log "AWS-Konfiguration mit GitHub synchronisieren"
+
+  [[ "$(git -C "$ROOT" branch --show-current)" == main ]] ||
+    fail "Bitte zuerst auf den Git-Branch main wechseln."
+
+  git -C "$ROOT" fetch origin main
+
+  local local_head remote_head
+  local_head=$(git -C "$ROOT" rev-parse HEAD)
+  remote_head=$(git -C "$ROOT" rev-parse origin/main)
+
+  [[ "$local_head" == "$remote_head" ]] ||
+    fail "GitHub main hat einen anderen Stand. Bitte zuerst synchronisieren."
+
+  local files=(
+    terraform/backend.tf
+    terraform/iam.tf
+    .github/workflows/aws-cicd.yml
+  )
+
+  git -C "$ROOT" add -- "${files[@]}"
+
+  if git -C "$ROOT" diff --cached --quiet; then
+    echo "Keine AWS-Konfigurationsänderungen für GitHub."
+    return 0
+  fi
+
+  git -C "$ROOT" diff --cached --check ||
+    fail "Git-Prüfung fehlgeschlagen."
+
+  echo "Folgende Änderungen werden übertragen:"
+  git -C "$ROOT" diff --cached --stat
+
+  confirm "Diese AWS-Konfiguration committen und pushen?" ||
+    fail "GitHub-Synchronisierung abgebrochen."
+
+  git -C "$ROOT" commit -m "Update AWS lab account configuration"
+  git -C "$ROOT" push origin main
+}
+
 run_pipeline(){
   need gh
   gh auth status >/dev/null 2>&1 || fail "GitHub CLI nicht angemeldet."
@@ -330,9 +400,12 @@ restore(){
   echo 'Terraform-Plan prüfen. Er darf keine unerwarteten Löschungen enthalten.'
   if confirm 'Terraform-Plan jetzt anwenden?'; then
     terraform -chdir="$TF_DIR" apply -input=false /tmp/cicd-lab-restore.tfplan
-  else echo 'Terraform apply übersprungen.'; fi
+  else
+    fail 'Terraform apply übersprungen. Pipeline und Deployment werden nicht gestartet.'
+  fi
   log 'Terraform abgeschlossen'
   if confirm 'GitHub-Pipeline starten und Docker auf EC2 deployen?'; then
+    sync_github
     run_pipeline
     deploy_web
   fi
