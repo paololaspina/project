@@ -70,7 +70,11 @@ ensure_oidc(){
 ensure_github_role(){
   log "GitHub-OIDC-Rolle prüfen: $ROLE_NAME"
   local trust policy arn="arn:aws:iam::$ACCOUNT:oidc-provider/token.actions.githubusercontent.com"
-  trust=$(jq -nc --arg arn "$arn" --arg sub "repo:$REPO:ref:refs/heads/main" '{Version:"2012-10-17",Statement:[{Effect:"Allow",Principal:{Federated:$arn},Action:"sts:AssumeRoleWithWebIdentity",Condition:{StringEquals:{"token.actions.githubusercontent.com:aud":"sts.amazonaws.com","token.actions.githubusercontent.com:sub":$sub}}}]}')
+  local oidc_sub
+  [[ -f "$ROOT/github-oidc-trust.json" ]] || fail "github-oidc-trust.json fehlt"
+  oidc_sub=$(jq -r '.Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] // empty' "$ROOT/github-oidc-trust.json")
+  [[ -n "$oidc_sub" ]] || fail "OIDC-Subject fehlt"
+  trust=$(jq -nc --arg arn "$arn" --arg sub "$oidc_sub" '{Version:"2012-10-17",Statement:[{Effect:"Allow",Principal:{Federated:$arn},Action:"sts:AssumeRoleWithWebIdentity",Condition:{StringEquals:{"token.actions.githubusercontent.com:aud":"sts.amazonaws.com","token.actions.githubusercontent.com:sub":$sub}}}]}')
   if ! awsx iam get-role --role-name "$ROLE_NAME" >/dev/null 2>&1; then
     awsx iam create-role --role-name "$ROLE_NAME" --assume-role-policy-document "$trust" >/dev/null
   else
@@ -84,7 +88,34 @@ prepare_tf(){
   log 'Terraform-Konfiguration für neue Sandbox prüfen'
   local bucket="cicd-terraform-state-$ACCOUNT"
   [[ -f "$TF_DIR/backend.tf" ]] || fail "backend.tf fehlt; für diese Version muss das Terraform-Projekt vorhanden sein."
-  # Fail closed: do not change arbitrary Terraform files / hardcoded VPC or subnet IDs.
+  # AWS-Account-IDs ausschließlich innerhalb bekannter ARN-Formate aktualisieren.
+  AWS_NEW_ACCOUNT="$ACCOUNT" TF_UPDATE_DIR="$TF_DIR" python3 - <<'PYARN'
+import os
+import re
+from pathlib import Path
+
+account = os.environ["AWS_NEW_ACCOUNT"]
+directory = Path(os.environ["TF_UPDATE_DIR"])
+
+pattern = re.compile(
+    r"(arn:aws(?:-[a-z]+)?:"
+    r"(?:iam|ecr):"
+    r"[^:\\s]*:)"
+    r"([0-9]{12})"
+    r"(?=:)"
+)
+
+for path in directory.glob("*.tf"):
+    original = path.read_text()
+    updated = pattern.sub(lambda m: m.group(1) + account, original)
+    if updated != original:
+        backup = path.with_name(path.name + ".pre-account-reset.bak")
+        backup.write_text(original)
+        path.write_text(updated)
+        print(f"Account-ARN aktualisiert: {path.name}")
+PYARN
+
+  # Andere fremde IDs weiterhin sicherheitshalber blockieren.
   local found
   found=$(grep -REho '[0-9]{12}' "$TF_DIR" --include='*.tf' 2>/dev/null | sort -u || true)
   if [[ -n "$found" ]] && [[ "$found" != "$ACCOUNT" ]]; then
@@ -123,6 +154,170 @@ update_workflow(){
   sed -E -i "s#arn:aws:iam::[0-9]{12}:role/GitHubActions-CICD-Role#arn:aws:iam::$ACCOUNT:role/GitHubActions-CICD-Role#g" "$workflow"
   echo 'Workflow angepasst. Git-Push ist später erforderlich, um einen neuen Image-Build auszulösen.'
 }
+
+deploy_web(){
+  preflight
+  log "EC2-Deployment für AWS-Account $ACCOUNT"
+
+  local instances instance image_tag image registry command_id result status
+
+  instances=$(awsx ec2 describe-instances \
+    --filters \
+      "Name=tag:Name,Values=cicd-webserver" \
+      "Name=tag:Project,Values=cicd-lab" \
+      "Name=instance-state-name,Values=running" \
+    --query 'Reservations[].Instances[].InstanceId' \
+    --output text)
+
+  read -r -a ids <<< "$instances"
+
+  [[ ${#ids[@]} -eq 1 ]] || fail \
+    "Erwartet: genau eine laufende CI/CD-EC2-Instanz. Gefunden: ${#ids[@]}"
+
+  instance="${ids[0]}"
+  echo "EC2-Instanz: $instance"
+
+  image_tag=$(awsx ecr describe-images \
+    --repository-name "$ECR_NAME" \
+    --output json | jq -r '
+      [.imageDetails[]
+       | select((.imageTags // []) | length > 0)]
+      | sort_by(.imagePushedAt)
+      | last
+      | .imageTags[0] // empty
+    ')
+
+  [[ -n "$image_tag" ]] || fail \
+    "Noch kein getaggtes Docker-Image in ECR. Zuerst GitHub-Pipeline ausführen."
+
+  registry="$ACCOUNT.dkr.ecr.$REGION.amazonaws.com"
+  image="$registry/$ECR_NAME:$image_tag"
+
+  echo "Docker-Image: $image"
+
+  local parameters
+  parameters=$(jq -nc \
+    --arg region "$REGION" \
+    --arg registry "$registry" \
+    --arg image "$image" \
+    '{
+      commands: [
+        "set -eu",
+        ("aws ecr get-login-password --region " + $region
+          + " | docker login --username AWS --password-stdin " + $registry),
+        ("docker pull " + $image),
+        "docker rm -f cicd-webserver 2>/dev/null || true",
+        ("docker run -d --name cicd-webserver --restart unless-stopped -p 80:80 " + $image),
+        "docker ps --filter name=cicd-webserver"
+      ]
+    }')
+
+  command_id=$(awsx ssm send-command \
+    --instance-ids "$instance" \
+    --document-name AWS-RunShellScript \
+    --parameters "$parameters" \
+    --query 'Command.CommandId' \
+    --output text)
+
+  echo "SSM-Auftrag: $command_id"
+
+  if ! awsx ssm wait command-executed \
+    --command-id "$command_id" \
+    --instance-id "$instance"; then
+    echo "SSM-Auftrag fehlgeschlagen oder nicht rechtzeitig abgeschlossen."
+  fi
+
+  result=$(awsx ssm get-command-invocation \
+    --command-id "$command_id" \
+    --instance-id "$instance" \
+    --output json)
+
+  echo "$result" | jq '{Status, StandardOutputContent, StandardErrorContent}'
+
+  status=$(jq -r '.Status' <<< "$result")
+  [[ "$status" == Success ]] || fail "Docker-Deployment fehlgeschlagen: $status"
+
+  local public_ip
+  public_ip=$(awsx ec2 describe-instances \
+    --instance-ids "$instance" \
+    --query 'Reservations[0].Instances[0].PublicIpAddress' \
+    --output text)
+
+  echo
+  echo "Website: http://$public_ip"
+
+  if curl -fsS --retry 5 --retry-delay 2 \
+    --max-time 10 "http://$public_ip/" >/dev/null; then
+    echo "Website erreichbar: OK"
+  else
+    fail "Container gestartet, aber Website über HTTP nicht erreichbar."
+  fi
+}
+
+
+run_pipeline(){
+  need gh
+  gh auth status >/dev/null 2>&1 || fail "GitHub CLI nicht angemeldet."
+
+  log "GitHub Actions starten"
+
+  # Die Pipeline läuft auf GitHub, nicht mit lokalen Änderungen.
+  if ! git -C "$ROOT" diff --quiet HEAD -- \
+      .github/workflows/aws-cicd.yml; then
+    fail "Workflow lokal geändert. Erst committen und nach GitHub pushen."
+  fi
+
+  local previous run_id sha image_tag
+  previous=$(gh run list -R "$REPO" \
+    --workflow aws-cicd.yml \
+    --event workflow_dispatch \
+    --branch main \
+    --limit 20 \
+    --json databaseId \
+    --jq '.[].databaseId')
+
+  gh workflow run aws-cicd.yml -R "$REPO" --ref main
+
+  run_id=""
+  for attempt in {1..30}; do
+    run_id=$(gh run list -R "$REPO" \
+      --workflow aws-cicd.yml \
+      --event workflow_dispatch \
+      --branch main \
+      --limit 20 \
+      --json databaseId \
+      --jq '.[].databaseId' |
+      while read -r id; do
+        if ! grep -qx "$id" <<< "$previous"; then
+          echo "$id"
+          break
+        fi
+      done)
+
+    [[ -n "$run_id" ]] && break
+    sleep 5
+  done
+
+  [[ -n "$run_id" ]] || fail "Neuen GitHub-Actions-Lauf nicht gefunden."
+
+  gh run watch "$run_id" -R "$REPO" --exit-status ||
+    fail "GitHub-Pipeline fehlgeschlagen."
+
+  sha=$(gh api "repos/$REPO/commits/main" --jq '.sha')
+  [[ "$sha" =~ ^[a-f0-9]{40}$ ]] || fail "Git-Commit konnte nicht ermittelt werden."
+
+  image_tag=$(awsx ecr describe-images \
+    --repository-name "$ECR_NAME" \
+    --image-ids "imageTag=$sha" \
+    --query 'imageDetails[0].imageTags[0]' \
+    --output text)
+
+  [[ "$image_tag" == "$sha" ]] ||
+    fail "Docker-Image des aktuellen GitHub-Commits fehlt in ECR."
+
+  echo "GitHub-Pipeline und ECR-Upload: OK"
+}
+
 restore(){
   preflight
   log "Wiederherstellung für Account $ACCOUNT"
@@ -136,11 +331,16 @@ restore(){
   if confirm 'Terraform-Plan jetzt anwenden?'; then
     terraform -chdir="$TF_DIR" apply -input=false /tmp/cicd-lab-restore.tfplan
   else echo 'Terraform apply übersprungen.'; fi
-  log 'Abschluss: GitHub-Workflow kontrollieren, ggf. committen/pushen; Deployment separat auslösen.'
+  log 'Terraform abgeschlossen'
+  if confirm 'GitHub-Pipeline starten und Docker auf EC2 deployen?'; then
+    run_pipeline
+    deploy_web
+  fi
   git -C "$ROOT" status --short
 }
 case "$MODE" in
  --check) check;;
+ --deploy) deploy_web;;
  --restore) restore;;
  --help|-h) cat <<HELP
 Verwendung: ./aws-lab-reset.sh --check | --restore

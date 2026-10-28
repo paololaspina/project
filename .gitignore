@@ -10,3 +10,15 @@ override.tf
 override.tf.json
 *_override.tf
 *_override.tf.json
+
+# Lokale Sicherungsdateien
+*.bak
+
+# Zugangsdaten und Umgebungsdateien
+.env
+.env.*
+!.env.example
+*.pem
+
+# Terraform-Pläne
+*.tfplan
