@@ -8,7 +8,7 @@ resource "aws_instance" "web" {
   ami           = data.aws_ssm_parameter.amazon_linux.value
   instance_type = "t3.micro"
 
-  subnet_id                   = "subnet-05f0a27052ac19854"
+  subnet_id                   = data.aws_subnet.default.id
   associate_public_ip_address = true
 
   vpc_security_group_ids = [

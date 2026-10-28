@@ -1,7 +1,7 @@
 resource "aws_security_group" "web" {
   name_prefix = "cicd-web-"
   description = "Security Group fuer unsere CI/CD-Webseite"
-  vpc_id      = "vpc-0ad96a05d2c73c196"
+  vpc_id      = data.aws_vpc.default.id
 
   tags = {
     Name    = "cicd-web-sg"
