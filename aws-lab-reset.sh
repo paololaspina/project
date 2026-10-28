@@ -66,17 +66,23 @@ ensure_identity(){
   log 'GitHub OIDC + Push-Rolle'
   local provider="arn:aws:iam::$ACCOUNT:oidc-provider/token.actions.githubusercontent.com"
   local trust sub policy
-  awsx iam get-open-id-connect-provider --open-id-connect-provider-arn "$provider" >/dev/null 2>&1 || \
+  local error code
+  if ! error=$(awsx iam get-open-id-connect-provider --open-id-connect-provider-arn "$provider" 2>&1); then
+    code=$(aws_error_code "$error")
+    [[ "$code" == NoSuchEntity ]] || fail "OIDC-Prüfung fehlgeschlagen: $error"
     awsx iam create-open-id-connect-provider --url https://token.actions.githubusercontent.com --client-id-list sts.amazonaws.com >/dev/null
+  fi
   # Preserve the previously working custom subject, if present; do not guess a new subject format.
   sub="repo:$REPO:ref:refs/heads/main"
   if [[ -f "$ROOT/github-oidc-trust.json" ]]; then
     sub=$(jq -er '[.Statement[]?.Condition.StringEquals["token.actions.githubusercontent.com:sub"]?] | map(select(type=="string")) | first' "$ROOT/github-oidc-trust.json") || fail 'OIDC-Subject in github-oidc-trust.json fehlt.'
   fi
   trust=$(jq -nc --arg arn "$provider" --arg sub "$sub" '{Version:"2012-10-17",Statement:[{Effect:"Allow",Principal:{Federated:$arn},Action:"sts:AssumeRoleWithWebIdentity",Condition:{StringEquals:{"token.actions.githubusercontent.com:aud":"sts.amazonaws.com","token.actions.githubusercontent.com:sub":$sub}}}]}')
-  if awsx iam get-role --role-name "$ROLE_NAME" >/dev/null 2>&1; then
+  if error=$(awsx iam get-role --role-name "$ROLE_NAME" 2>&1); then
     awsx iam update-assume-role-policy --role-name "$ROLE_NAME" --policy-document "$trust" >/dev/null
   else
+    code=$(aws_error_code "$error")
+    [[ "$code" == NoSuchEntity ]] || fail "IAM-Rollenprüfung fehlgeschlagen: $error"
     awsx iam create-role --role-name "$ROLE_NAME" --assume-role-policy-document "$trust" >/dev/null
   fi
   policy=$(jq -nc --arg repo "arn:aws:ecr:$REGION:$ACCOUNT:repository/$ECR_NAME" '{Version:"2012-10-17",Statement:[{Effect:"Allow",Action:"ecr:GetAuthorizationToken",Resource:"*"},{Effect:"Allow",Action:["ecr:BatchCheckLayerAvailability","ecr:InitiateLayerUpload","ecr:UploadLayerPart","ecr:CompleteLayerUpload","ecr:PutImage","ecr:BatchGetImage"],Resource:$repo}]}')

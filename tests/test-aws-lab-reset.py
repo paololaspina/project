@@ -427,5 +427,110 @@ restore
                     self.assertNotIn("PIPELINE", output)
 
 
+    def test_19_existing_resources_are_reused(self):
+        """Vorhandene S3-/ECR-Ressourcen dürfen nicht neu erstellt werden."""
+        bash = r"""
+source "$SCRIPT_UNDER_TEST" --help >/dev/null
+
+ACCOUNT=123456789012
+PROFILE=lab
+REGION=us-east-1
+ECR_NAME=cicd-webserver
+
+awsx(){
+  case " $* " in
+    *" s3api head-bucket "*)
+      return 0 ;;
+    *" s3api put-public-access-block "* | \
+    *" s3api put-bucket-versioning "* | \
+    *" s3api put-bucket-encryption "*)
+      return 0 ;;
+    *" ecr describe-repositories "*)
+      return 0 ;;
+    *" s3api create-bucket "*|*" ecr create-repository "*)
+      echo "UNERWARTETE_ERSTELLUNG: $*" >&2
+      return 99 ;;
+    *)
+      echo "UNERWARTETER_AUFRUF: $*" >&2
+      return 98 ;;
+  esac
+}
+
+ensure_bucket
+ensure_ecr
+ensure_bucket
+ensure_ecr
+
+echo "WIEDERHOLUNG_OK"
+"""
+        env = os.environ.copy()
+        env["SCRIPT_UNDER_TEST"] = str(SCRIPT)
+
+        result = subprocess.run(
+            ["bash", "-c", bash],
+            cwd=ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+
+        output = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 0, output)
+        self.assertIn("WIEDERHOLUNG_OK", output)
+        self.assertNotIn("UNERWARTETE_ERSTELLUNG", output)
+        self.assertNotIn("UNERWARTETER_AUFRUF", output)
+
+
+    def test_20_existing_identity_is_reused(self):
+        """Bestehende IAM-Rolle und OIDC-Provider wiederverwenden."""
+        bash = r"""
+source "$SCRIPT_UNDER_TEST" --help >/dev/null
+
+ACCOUNT=123456789012
+PROFILE=lab
+REGION=us-east-1
+REPO=paololaspina/project
+ROLE_NAME=GitHubActions-CICD-Role
+ECR_NAME=cicd-webserver
+
+awsx(){
+  case "$*" in
+    *"iam get-open-id-connect-provider"*|*"iam get-role"*)
+      return 0 ;;
+    *"iam update-assume-role-policy"*|*"iam put-role-policy"*)
+      return 0 ;;
+    *"iam create-role"*|*"iam create-open-id-connect-provider"*)
+      echo "UNERWARTETE_ERSTELLUNG" >&2
+      return 99 ;;
+    *)
+      echo "UNERWARTETER_AUFRUF: $*" >&2
+      return 98 ;;
+  esac
+}
+
+ensure_identity
+ensure_identity
+echo WIEDERHOLUNG_OK
+"""
+        env = os.environ.copy()
+        env["SCRIPT_UNDER_TEST"] = str(SCRIPT)
+
+        result = subprocess.run(
+            ["bash", "-c", bash],
+            cwd=ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+
+        output = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 0, output)
+        self.assertIn("WIEDERHOLUNG_OK", output)
+        self.assertNotIn("UNERWARTETE_ERSTELLUNG", output)
+        self.assertNotIn("UNERWARTETER_AUFRUF", output)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
