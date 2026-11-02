@@ -289,7 +289,6 @@ restore(){
   log "RESTORE für $ACCOUNT — Änderungen an S3/ECR/IAM und Terraform"
   confirm 'Wiederherstellung beginnen?' || fail 'Abgebrochen.'
   ensure_bucket
-  ensure_identity
   prepare_configuration
   terraform_restore
   sync_github

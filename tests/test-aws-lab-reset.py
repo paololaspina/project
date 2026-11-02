@@ -396,7 +396,6 @@ restore
             "PREFLIGHT",
             "VERIFY_GIT",
             "S3",
-            "IAM_OIDC",
             "CONFIG",
             "TERRAFORM",
             "GIT_SYNC",
