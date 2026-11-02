@@ -33,3 +33,43 @@ jobs:
 
       - name: Terraform Validate
         run: terraform -chdir=terraform validate -no-color
+
+  plan:
+    name: Terraform Plan
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    needs: validate
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Repository auschecken
+        uses: actions/checkout@v4
+
+      - name: Terraform installieren
+        uses: hashicorp/setup-terraform@v3
+
+      - name: AWS-Anmeldung über OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.TERRAFORM_PLAN_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: AWS Account ermitteln
+        id: aws
+        run: |
+          echo "account=$(aws sts get-caller-identity --query Account --output text)" >> "$GITHUB_OUTPUT"
+
+      - name: Terraform initialisieren
+        env:
+          AWS_ACCOUNT_ID: ${{ steps.aws.outputs.account }}
+        run: |
+          terraform -chdir=terraform init \
+            -backend-config="bucket=cicd-terraform-state-${AWS_ACCOUNT_ID}" \
+            -reconfigure \
+            -input=false
+
+      - name: Terraform Plan
+        run: terraform -chdir=terraform plan -no-color -input=false -lock-timeout=60s
