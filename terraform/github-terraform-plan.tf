@@ -54,6 +54,7 @@ resource "aws_iam_role_policy" "terraform_plan_readonly" {
           "ec2:DescribeInstanceAttribute",
           "ec2:DescribeInstanceStatus",
           "ec2:DescribeVpcs",
+          "ec2:DescribeVpcAttribute",
           "ec2:DescribeSubnets",
           "ec2:DescribeSecurityGroups",
           "ec2:DescribeSecurityGroupRules",
