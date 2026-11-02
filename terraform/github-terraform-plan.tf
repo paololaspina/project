@@ -52,6 +52,7 @@ resource "aws_iam_role_policy" "terraform_plan_readonly" {
           "ec2:DescribeImages",
           "ec2:DescribeInstances",
           "ec2:DescribeInstanceTypes",
+          "ec2:DescribeTags",
           "ec2:DescribeInstanceAttribute",
           "ec2:DescribeInstanceStatus",
           "ec2:DescribeVpcs",
