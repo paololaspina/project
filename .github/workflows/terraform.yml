@@ -1,0 +1,35 @@
+name: Terraform CI
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "terraform/**"
+      - ".github/workflows/terraform.yml"
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Terraform Validate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Repository auschecken
+        uses: actions/checkout@v4
+
+      - name: Terraform installieren
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform Format prüfen
+        run: terraform -chdir=terraform fmt -check -recursive
+
+      - name: Terraform initialisieren
+        run: terraform -chdir=terraform init -backend=false -input=false
+
+      - name: Terraform Validate
+        run: terraform -chdir=terraform validate -no-color
