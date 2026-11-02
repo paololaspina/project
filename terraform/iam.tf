@@ -49,7 +49,7 @@ resource "aws_iam_role_policy" "ec2_ecr_pull" {
           "ecr:BatchGetImage",
           "ecr:GetDownloadUrlForLayer"
         ]
-        Resource = "arn:aws:ecr:us-east-1:590183669588:repository/cicd-webserver"
+        Resource = "arn:aws:ecr:us-east-1:625830751097:repository/cicd-webserver"
       }
     ]
   })
