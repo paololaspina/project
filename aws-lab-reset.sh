@@ -1,9 +1,16 @@
 #!/usr/bin/env bash
+
+# Git-Ausgaben ohne interaktiven Pager anzeigen.
+export GIT_PAGER=cat
 # AWS training lab recovery for paololaspina/project.
 # --check: read-only diagnostics; --restore: account-aware provisioning and deployment;
 # --deploy: redeploy the image for the current GitHub main commit.
 set -Eeuo pipefail
 trap 'rc=$?; echo "FEHLER (Zeile $LINENO, Exit $rc). Letzte Meldung beachten." >&2' ERR
+
+# AWS-Profil auch für Terraform und das S3-Backend setzen.
+export AWS_PROFILE="${AWS_PROFILE:-lab}"
+export AWS_REGION="${AWS_REGION:-us-east-1}"
 
 MODE=${1:---help}
 PROFILE=${AWS_PROFILE:-lab}
