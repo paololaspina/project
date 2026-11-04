@@ -1,0 +1,92 @@
+name: Terraform Apply
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  apply:
+    name: Terraform Apply (Freigabe erforderlich)
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+
+    environment: terraform-apply
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Repository auschecken
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Terraform installieren
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform validieren
+        run: |
+          terraform -chdir=terraform fmt -check -recursive
+          terraform -chdir=terraform init -backend=false -input=false
+          terraform -chdir=terraform validate -no-color
+
+      - name: AWS-Anmeldung über Apply-OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.TERRAFORM_APPLY_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: AWS-Account ermitteln
+        id: aws
+        run: |
+          echo "account=$(aws sts get-caller-identity --query Account --output text)" >> "$GITHUB_OUTPUT"
+
+      - name: S3 Remote State initialisieren
+        env:
+          AWS_ACCOUNT_ID: ${{ steps.aws.outputs.account }}
+        run: |
+          terraform -chdir=terraform init \
+            -backend-config="bucket=cicd-terraform-state-${AWS_ACCOUNT_ID}" \
+            -reconfigure \
+            -input=false
+
+      - name: Terraform-Plan speichern
+        run: |
+          terraform -chdir=terraform plan \
+            -input=false \
+            -lock-timeout=60s \
+            -out=tfplan
+
+      - name: Änderungen sicherheitsprüfen
+        run: |
+          terraform -chdir=terraform show -json tfplan > /tmp/tfplan.json
+
+          jq -e '
+            [
+              .resource_changes[]?
+              | select(.change.actions != ["no-op"])
+              | select(
+                  (
+                    .type as $type
+                    | [
+                        "aws_cloudwatch_dashboard",
+                        "aws_cloudwatch_metric_alarm",
+                        "aws_ecr_repository",
+                        "aws_vpc_security_group_ingress_rule",
+                        "aws_vpc_security_group_egress_rule"
+                      ]
+                    | index($type)
+                  ) == null
+                  or (.change.actions | index("delete") != null)
+                )
+            ] | length == 0
+          ' /tmp/tfplan.json || {
+            echo "::error::Nicht freigegebene Ressource oder Löschaktion im Terraform-Plan."
+            exit 1
+          }
+
+      - name: Terraform Apply ausführen
+        run: terraform -chdir=terraform apply -input=false tfplan
