@@ -203,6 +203,58 @@ sync_github(){
   git -C "$ROOT" commit -m "Update AWS lab for account $ACCOUNT"
   git -C "$ROOT" push origin main
 }
+sync_operator_profile(){
+  log 'AWS Operator-Profil fuer aktuellen Account aktualisieren'
+  need aws
+
+  local role="Terraform-Operator-Role"
+  local arn="arn:aws:iam::$ACCOUNT:role/$role"
+  local identity
+
+  awsx iam get-role --role-name "$role" >/dev/null ||
+    fail "Operator-Rolle fehlt: $role"
+
+  aws configure set role_arn "$arn" --profile operator
+  aws configure set source_profile "$PROFILE" --profile operator
+  aws configure set region "$REGION" --profile operator
+  aws configure set role_session_name lab-operator --profile operator
+
+  identity=$(aws sts get-caller-identity \
+    --profile operator \
+    --query Arn \
+    --output text) || fail 'Operator-Rollenuebernahme fehlgeschlagen.'
+
+  [[ "$identity" == "arn:aws:sts::$ACCOUNT:assumed-role/$role/"* ]] ||
+    fail "Unerwartete Operator-Identitaet: $identity"
+
+  echo "Operator-Profil bereit: $identity"
+}
+
+sync_terraform_roles(){
+  log 'GitHub Terraform-Rollen fuer aktuellen AWS-Account synchronisieren'
+  need gh
+
+  local role arn actual
+  for role in Plan Apply; do
+    awsx iam get-role \
+      --role-name "GitHubActions-Terraform-${role}-Role" \
+      >/dev/null || fail "Terraform-${role}-Rolle fehlt."
+
+    arn="arn:aws:iam::$ACCOUNT:role/GitHubActions-Terraform-${role}-Role"
+
+    gh variable set "TERRAFORM_${role^^}_ROLE_ARN" \
+      --repo "$REPO" \
+      --body "$arn" || fail "GitHub-Variable fuer ${role} konnte nicht gesetzt werden."
+
+    actual=$(gh variable get "TERRAFORM_${role^^}_ROLE_ARN" \
+      --repo "$REPO" --json value --jq '.value') || fail "GitHub-Variable fuer ${role} nicht lesbar."
+
+    [[ "$actual" == "$arn" ]] || fail "GitHub-Variable fuer ${role} stimmt nicht."
+
+    echo "TERRAFORM_${role^^}_ROLE_ARN: $actual"
+  done
+}
+
 image_exists(){
   awsx ecr describe-images --repository-name "$ECR_NAME" --image-ids "imageTag=$1" >/dev/null 2>&1
 }
@@ -291,7 +343,9 @@ restore(){
   ensure_bucket
   prepare_configuration
   terraform_restore
+  sync_operator_profile
   sync_github
+  sync_terraform_roles
   run_pipeline
   deploy_web
   log 'Wiederherstellung abgeschlossen.'
