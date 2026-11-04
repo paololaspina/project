@@ -362,6 +362,7 @@ terraform_restore(){
   echo TERRAFORM
   [[ "$MOCK_FAILURE" != terraform ]]
 }
+sync_terraform_roles(){ echo GITHUB_ROLES; }
 sync_github(){
   echo GIT_SYNC
   [[ "$MOCK_FAILURE" != github ]]
