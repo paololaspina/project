@@ -481,6 +481,112 @@ echo "WIEDERHOLUNG_OK"
         self.assertNotIn("UNERWARTETER_AUFRUF", output)
 
 
+
+    def test_21_terraform_role_variable_sync(self):
+        """GitHub-Rollen synchronisieren und Fehler sicher behandeln."""
+        bash = r"""
+source "$SCRIPT_UNDER_TEST" --help >/dev/null
+
+ACCOUNT=123456789012
+REPO=paololaspina/project
+
+declare -A SAVED_VARS
+
+need(){ :; }
+
+awsx(){
+  if [[ "$1 $2" != "iam get-role" ]]; then
+    return 99
+  fi
+
+  if [[ "$MOCK_FAILURE" == missing_role &&
+        "$*" == *"Terraform-Apply-Role"* ]]; then
+    return 1
+  fi
+
+  return 0
+}
+
+gh(){
+  local operation="$1"
+  local action="$2"
+  local name="$3"
+  shift 3
+
+  if [[ "$operation" != variable ]]; then
+    return 99
+  fi
+
+  if [[ "$action" == set ]]; then
+    if [[ "$MOCK_FAILURE" == github_set &&
+          "$name" == TERRAFORM_APPLY_ROLE_ARN ]]; then
+      return 1
+    fi
+
+    local body=""
+    while (( $# )); do
+      if [[ "$1" == --body ]]; then
+        body="$2"
+        break
+      fi
+      shift
+    done
+
+    SAVED_VARS["$name"]="$body"
+    return 0
+  fi
+
+  if [[ "$action" == get ]]; then
+    if [[ "$MOCK_FAILURE" == bad_readback &&
+          "$name" == TERRAFORM_APPLY_ROLE_ARN ]]; then
+      echo "ungueltige-arn"
+    else
+      printf '%s\n' "${SAVED_VARS[$name]:-}"
+    fi
+    return 0
+  fi
+
+  return 99
+}
+
+sync_terraform_roles
+"""
+
+        for failure in ("", "missing_role", "github_set", "bad_readback"):
+            with self.subTest(failure=failure or "success"):
+                env = os.environ.copy()
+                env["SCRIPT_UNDER_TEST"] = str(SCRIPT)
+                env["MOCK_FAILURE"] = failure
+
+                result = subprocess.run(
+                    ["bash", "-c", bash],
+                    cwd=ROOT,
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=30
+                )
+
+                output = result.stdout + result.stderr
+
+                if not failure:
+                    self.assertEqual(result.returncode, 0, output)
+                    self.assertIn(
+                        "arn:aws:iam::123456789012:role/"
+                        "GitHubActions-Terraform-Plan-Role",
+                        output
+                    )
+                    self.assertIn(
+                        "arn:aws:iam::123456789012:role/"
+                        "GitHubActions-Terraform-Apply-Role",
+                        output
+                    )
+                else:
+                    self.assertNotEqual(
+                        result.returncode, 0,
+                        f"Fehler {failure} wurde nicht erkannt:\n{output}"
+                    )
+
     def test_20_existing_identity_is_reused(self):
         """Bestehende IAM-Rolle und OIDC-Provider wiederverwenden."""
         bash = r"""
