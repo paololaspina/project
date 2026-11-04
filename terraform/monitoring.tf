@@ -13,6 +13,7 @@ resource "aws_cloudwatch_metric_alarm" "cpu_high" {
   threshold           = 80
   comparison_operator = "GreaterThanThreshold"
   treat_missing_data  = "missing"
+  alarm_actions       = [aws_sns_topic.alerts.arn]
 
   dimensions = {
     InstanceId = aws_instance.web.id
@@ -35,6 +36,7 @@ resource "aws_cloudwatch_metric_alarm" "status_failed" {
   threshold           = 0
   comparison_operator = "GreaterThanThreshold"
   treat_missing_data  = "missing"
+  alarm_actions       = [aws_sns_topic.alerts.arn]
 
   dimensions = {
     InstanceId = aws_instance.web.id
