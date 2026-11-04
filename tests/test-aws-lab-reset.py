@@ -363,6 +363,7 @@ terraform_restore(){
   [[ "$MOCK_FAILURE" != terraform ]]
 }
 sync_terraform_roles(){ echo GITHUB_ROLES; }
+sync_operator_profile(){ echo OPERATOR_PROFILE; }
 sync_github(){
   echo GIT_SYNC
   [[ "$MOCK_FAILURE" != github ]]
@@ -399,6 +400,7 @@ restore
             "S3",
             "CONFIG",
             "TERRAFORM",
+            "OPERATOR_PROFILE",
             "GIT_SYNC",
             "PIPELINE",
             "DEPLOY",
