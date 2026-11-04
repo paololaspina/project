@@ -6,12 +6,138 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: terraform-apply
+  cancel-in-progress: false
+
 jobs:
-  apply:
-    name: Terraform Apply (Freigabe erforderlich)
+  plan:
+    name: Validate, Plan und Sicherheitsprüfung
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
 
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Repository auschecken
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Terraform installieren
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.16.5"
+          terraform_wrapper: false
+
+      - name: Terraform validieren
+        run: |
+          terraform -chdir=terraform fmt -check -recursive
+          terraform -chdir=terraform init -backend=false -input=false
+          terraform -chdir=terraform validate -no-color
+
+      - name: AWS-Anmeldung mit Plan-Rolle
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.TERRAFORM_PLAN_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: AWS-Account prüfen
+        id: aws
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACCOUNT=$(aws sts get-caller-identity \
+            --query Account --output text)
+          echo "account=$ACCOUNT" >> "$GITHUB_OUTPUT"
+
+      - name: Remote State initialisieren
+        env:
+          AWS_ACCOUNT_ID: ${{ steps.aws.outputs.account }}
+        run: |
+          terraform -chdir=terraform init \
+            -backend-config="bucket=cicd-terraform-state-${AWS_ACCOUNT_ID}" \
+            -reconfigure \
+            -input=false
+
+      - name: Terraform-Plan erstellen
+        run: |
+          terraform -chdir=terraform plan \
+            -input=false \
+            -lock-timeout=60s \
+            -out=tfplan
+
+      - name: Terraform-Plan sicherheitsprüfen
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          terraform -chdir=terraform show -json tfplan \
+            > /tmp/tfplan.json
+
+          jq -e '
+            [
+              .resource_changes[]?
+              | select(.change.actions != ["no-op"])
+              | select(
+                  (
+                    .type as $t
+                    | [
+                        "aws_cloudwatch_dashboard",
+                        "aws_cloudwatch_metric_alarm",
+                        "aws_ecr_repository",
+                        "aws_vpc_security_group_ingress_rule",
+                        "aws_vpc_security_group_egress_rule"
+                      ]
+                    | index($t)
+                  ) == null
+                  or
+                  (
+                    .change.actions != ["create"]
+                    and .change.actions != ["update"]
+                  )
+                )
+            ] | length == 0
+          ' /tmp/tfplan.json || {
+            echo "::error::Plan enthält nicht erlaubte Änderungen."
+            exit 1
+          }
+
+          {
+            echo "## Terraform-Plan zur Freigabe"
+            echo ""
+            echo "AWS-Account: ${{ steps.aws.outputs.account }}"
+            echo ""
+            echo "| Ressource | Aktion |"
+            echo "|---|---|"
+            jq -r '
+              .resource_changes[]?
+              | select(.change.actions != ["no-op"])
+              | "| \(.address) | \(.change.actions | join(", ")) |"
+            ' /tmp/tfplan.json
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Plan-Integrität dokumentieren
+        run: |
+          cd terraform
+          sha256sum tfplan > tfplan.sha256
+
+      - name: Gespeicherten Plan übertragen
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-approved-plan
+          path: |
+            terraform/tfplan
+            terraform/tfplan.sha256
+          retention-days: 1
+          if-no-files-found: error
+
+  apply:
+    name: Terraform Apply (Genehmigung)
+    needs: plan
+    runs-on: ubuntu-latest
     environment: terraform-apply
 
     permissions:
@@ -26,25 +152,48 @@ jobs:
 
       - name: Terraform installieren
         uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.16.5"
+          terraform_wrapper: false
 
-      - name: Terraform validieren
+      - name: Gespeicherten Plan herunterladen
+        uses: actions/download-artifact@v4
+        with:
+          name: terraform-approved-plan
+          path: terraform
+
+      - name: Plan-Integrität kontrollieren
         run: |
-          terraform -chdir=terraform fmt -check -recursive
-          terraform -chdir=terraform init -backend=false -input=false
-          terraform -chdir=terraform validate -no-color
+          cd terraform
+          sha256sum --check tfplan.sha256
 
-      - name: AWS-Anmeldung über Apply-OIDC
+      - name: AWS-Anmeldung mit Apply-Rolle
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.TERRAFORM_APPLY_ROLE_ARN }}
           aws-region: us-east-1
 
-      - name: AWS-Account ermitteln
+      - name: AWS-Account abgleichen
         id: aws
+        shell: bash
         run: |
-          echo "account=$(aws sts get-caller-identity --query Account --output text)" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
 
-      - name: S3 Remote State initialisieren
+          ACCOUNT=$(aws sts get-caller-identity \
+            --query Account --output text)
+
+          EXPECTED=$(grep -oE \
+            'cicd-terraform-state-[0-9]{12}' \
+            terraform/backend.tf | head -n 1 | cut -d- -f4)
+
+          test "$ACCOUNT" = "$EXPECTED" || {
+            echo "::error::AWS-Account stimmt nicht mit Backend überein."
+            exit 1
+          }
+
+          echo "account=$ACCOUNT" >> "$GITHUB_OUTPUT"
+
+      - name: Terraform-Backend initialisieren
         env:
           AWS_ACCOUNT_ID: ${{ steps.aws.outputs.account }}
         run: |
@@ -53,40 +202,9 @@ jobs:
             -reconfigure \
             -input=false
 
-      - name: Terraform-Plan speichern
+      - name: Genehmigten Terraform-Plan anwenden
         run: |
-          terraform -chdir=terraform plan \
+          terraform -chdir=terraform apply \
             -input=false \
             -lock-timeout=60s \
-            -out=tfplan
-
-      - name: Änderungen sicherheitsprüfen
-        run: |
-          terraform -chdir=terraform show -json tfplan > /tmp/tfplan.json
-
-          jq -e '
-            [
-              .resource_changes[]?
-              | select(.change.actions != ["no-op"])
-              | select(
-                  (
-                    .type as $type
-                    | [
-                        "aws_cloudwatch_dashboard",
-                        "aws_cloudwatch_metric_alarm",
-                        "aws_ecr_repository",
-                        "aws_vpc_security_group_ingress_rule",
-                        "aws_vpc_security_group_egress_rule"
-                      ]
-                    | index($type)
-                  ) == null
-                  or (.change.actions | index("delete") != null)
-                )
-            ] | length == 0
-          ' /tmp/tfplan.json || {
-            echo "::error::Nicht freigegebene Ressource oder Löschaktion im Terraform-Plan."
-            exit 1
-          }
-
-      - name: Terraform Apply ausführen
-        run: terraform -chdir=terraform apply -input=false tfplan
+            tfplan
