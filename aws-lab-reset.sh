@@ -246,8 +246,7 @@ sync_github(){
   git -C "$ROOT" pull --ff-only origin main ||
     fail 'Lokaler main konnte nicht aktualisiert werden.'
 
-  [[ "$(git -C "$ROOT" rev-parse HEAD)" ==
-     "$(git -C "$ROOT" rev-parse origin/main)" ]] ||
+  [[ "$(git -C "$ROOT" rev-parse HEAD)" == "$(git -C "$ROOT" rev-parse origin/main)" ]] ||
     fail 'Lokaler main ist nicht synchron.'
 
   echo 'GitHub-Synchronisierung abgeschlossen.'
