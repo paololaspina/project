@@ -185,24 +185,74 @@ verify_git(){
   [[ -z "$(git -C "$ROOT" diff --cached --name-only)" ]] || fail 'Es liegen bereits gestagte Dateien vor; bitte zuerst prüfen.'
 }
 sync_github(){
-  log 'Account-Konfiguration gezielt zu GitHub übertragen'
+  log 'Account-Konfiguration per Pull Request synchronisieren'
   verify_git
-  local files=(terraform/backend.tf terraform/iam.tf .github/workflows/aws-cicd.yml)
+
+  local files=(
+    terraform/backend.tf
+    terraform/iam.tf
+    .github/workflows/aws-cicd.yml
+  )
+
   git -C "$ROOT" add -- "${files[@]}"
+
   if git -C "$ROOT" diff --cached --quiet; then
     echo 'GitHub-Konfiguration bereits synchronisiert.'
     return 0
   fi
+
   git -C "$ROOT" diff --cached --check
   git -C "$ROOT" diff --cached --stat
-  git -C "$ROOT" diff --cached -- "${files[@]}"
-  if ! confirm 'Genau diese Dateien committen und pushen?'; then
-    git -C "$ROOT" reset -q -- "${files[@]}"
+
+  confirm 'Account-Konfiguration als Pull Request übertragen?' ||
     fail 'GitHub-Synchronisierung abgelehnt.'
-  fi
+
+  local branch pr checks
+  branch="restore/aws-$ACCOUNT-$(date +%s)"
+
+  git -C "$ROOT" switch -c "$branch"
   git -C "$ROOT" commit -m "Update AWS lab for account $ACCOUNT"
-  git -C "$ROOT" push origin main
+  git -C "$ROOT" push -u origin "$branch"
+
+  pr=$(gh pr create \
+    --repo "$REPO" \
+    --base main \
+    --head "$branch" \
+    --title "Restore AWS lab account $ACCOUNT" \
+    --body "Synchronisiert Terraform-Backend und GitHub-OIDC-Rolle für den aktuellen AWS-Account.")
+
+  echo "Pull Request: $pr"
+  echo 'Warte auf GitHub-Prüfungen ...'
+
+  gh pr checks "$pr" --repo "$REPO" --watch ||
+    fail 'GitHub-Checks fehlgeschlagen oder nicht abgeschlossen.'
+
+  checks=$(gh pr view "$pr" --repo "$REPO" \
+    --json statusCheckRollup \
+    --jq '[.statusCheckRollup[] |
+      select((.name | contains("Terraform Validate")) and
+      .conclusion == "SUCCESS")] | length')
+
+  [[ "$checks" -ge 1 ]] ||
+    fail 'Erfolgreicher Terraform-Validate-Check fehlt.'
+
+  confirm 'Pull Request nach erfolgreicher Prüfung mergen?' ||
+    fail 'Merge nicht bestätigt. Pull Request bleibt offen.'
+
+  gh pr merge "$pr" --repo "$REPO" --squash --delete-branch ||
+    fail 'Pull-Request-Merge fehlgeschlagen.'
+
+  git -C "$ROOT" switch main
+  git -C "$ROOT" pull --ff-only origin main ||
+    fail 'Lokaler main konnte nicht aktualisiert werden.'
+
+  [[ "$(git -C "$ROOT" rev-parse HEAD)" ==
+     "$(git -C "$ROOT" rev-parse origin/main)" ]] ||
+    fail 'Lokaler main ist nicht synchron.'
+
+  echo 'GitHub-Synchronisierung abgeschlossen.'
 }
+
 sync_operator_profile(){
   log 'AWS Operator-Profil fuer aktuellen Account aktualisieren'
   need aws

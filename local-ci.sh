@@ -32,8 +32,14 @@ terraform fmt -check -recursive terraform
 
 echo
 echo "[5/5] Terraform-Validierung"
+# Isolierte Terraform-Initialisierung ohne altes S3-Backend.
+CI_TF_DATA=$(mktemp -d)
+trap 'rm -rf "$CI_TF_DATA"' EXIT
+
+export TF_DATA_DIR="$CI_TF_DATA"
 terraform -chdir=terraform init -backend=false -input=false
 terraform -chdir=terraform validate -no-color
+unset TF_DATA_DIR
 
 echo
 echo "=================================="
