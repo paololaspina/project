@@ -63,7 +63,7 @@ jobs:
       - name: AWS-Anmeldung über OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::945129430525:role/GitHubActions-CICD-Role
+          role-to-assume: arn:aws:iam::177602935884:role/GitHubActions-CICD-Role
           aws-region: us-east-1
 
       - name: Bei Amazon ECR anmelden
