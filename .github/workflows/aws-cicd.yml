@@ -1,80 +1,100 @@
 name: AWS CI/CD Pipeline
+run-name: AWS CI/CD ${{ inputs.restore_id || github.sha }}
 
 on:
   push:
     branches:
       - main
-
   workflow_dispatch:
+    inputs:
+      restore_id:
+        description: Optional run identifier used by aws-lab-reset.sh
+        type: string
 
 permissions:
   contents: read
 
-jobs:
+concurrency:
+  group: aws-cicd-main
+  cancel-in-progress: false
 
-  # ==========================================
-  # JOB 1: HTML-Tests
-  # ==========================================
+jobs:
   test:
     name: HTML Tests
     runs-on: ubuntu-latest
-
     steps:
-      - name: Repository auschecken
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v5
+      - run: bash ./test.sh
 
-      - name: Tests ausführen
-        run: bash ./test.sh
-
-  # ==========================================
-  # JOB 2: Docker-Build
-  # ==========================================
-  build:
-    name: Docker Build
-    runs-on: ubuntu-latest
-    needs: test
-
-    steps:
-      - name: Repository auschecken
-        uses: actions/checkout@v5
-
-      - name: Docker-Image bauen
-        run: docker build -t cicd-webserver:${{ github.sha }} .
-
-      - name: Docker-Image überprüfen
-        run: docker image inspect cicd-webserver:${{ github.sha }}
-
-  # ==========================================
-  # JOB 3: Docker-Image nach Amazon ECR
-  # ==========================================
   push_ecr:
     name: Push to Amazon ECR
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    needs: build
-
+    needs: test
     permissions:
       contents: read
       id-token: write
-
+    outputs:
+      image: ${{ steps.publish.outputs.image }}
     steps:
-      - name: Repository auschecken
-        uses: actions/checkout@v5
-
-      - name: AWS-Anmeldung über OIDC
-        uses: aws-actions/configure-aws-credentials@v4
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::639493421189:role/GitHubActions-CICD-Role
           aws-region: us-east-1
-
-      - name: Bei Amazon ECR anmelden
-        id: login-ecr
+      - id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Docker-Image bauen und hochladen
+      - id: publish
+        name: Publish or reuse the immutable commit image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY: cicd-webserver
-          IMAGE_TAG: ${{ github.sha }}
         run: |
-          docker build -t "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" .
-          docker push "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          set -euo pipefail
+          repository=cicd-webserver
+          tag="$ECR_REGISTRY/$repository:$GITHUB_SHA"
+
+          lookup_image() {
+            aws ecr batch-get-image --repository-name "$repository" \
+              --image-ids "imageTag=$GITHUB_SHA" --output json
+          }
+
+          result=$(lookup_image)
+          if jq -e '.failures | length == 1 and .[0].failureCode == "ImageNotFound"' <<< "$result" >/dev/null; then
+            docker build -t "$tag" .
+            docker push "$tag"
+            result=$(lookup_image)
+          fi
+
+          digest=$(jq -er '.images[0].imageId.imageDigest | select(test("^sha256:[0-9a-f]{64}$"))' <<< "$result")
+          echo "image=$ECR_REGISTRY/$repository@$digest" >> "$GITHUB_OUTPUT"
+
+  deploy_ecs:
+    name: Deploy and smoke-test Fargate
+    runs-on: ubuntu-latest
+    needs: push_ecr
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Verify this is still the main commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          latest=$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq '.sha')
+          test "$latest" = "$GITHUB_SHA" || {
+            echo "::error::main advanced. Deploy the current main commit instead."
+            exit 1
+          }
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.ECS_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+      - name: Deploy and verify the nginx page
+        env:
+          IMAGE: ${{ needs.push_ecr.outputs.image }}
+        run: bash scripts/deploy-ecs.sh "$IMAGE"

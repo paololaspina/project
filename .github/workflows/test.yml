@@ -20,3 +20,9 @@ jobs:
 
       - name: Tests ausführen
         run: ./test.sh
+
+      - name: Deployment-Skripte prüfen
+        run: |
+          bash -n scripts/deploy-ecs.sh
+          python3 tests/test-aws-lab-reset.py
+          bash tests/test-ecs-deploy.sh

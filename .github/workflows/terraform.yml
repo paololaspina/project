@@ -31,6 +31,9 @@ jobs:
       - name: Terraform Validate
         run: terraform -chdir=terraform validate -no-color
 
+      - name: Terraform-Tests mit simuliertem AWS
+        run: terraform -chdir=terraform test -no-color
+
   plan:
     name: Terraform Plan
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'

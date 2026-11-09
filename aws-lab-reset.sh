@@ -32,6 +32,7 @@ awsx(){ aws --profile "$PROFILE" --region "$REGION" "$@"; }
 confirm(){ local a; read -r -p "$1 [ja/NEIN] " a; [[ "$a" == ja ]]; }
 preflight(){
   need aws; need jq; need git; need terraform; need python3
+  [[ "$REGION" == us-east-1 ]] || fail 'Dieses Lab verwendet us-east-1.'
   [[ -d "$TF_DIR" && -f "$WORKFLOW" ]] || fail 'Terraform-Ordner oder AWS-Workflow fehlt.'
   ACCOUNT=$(awsx sts get-caller-identity --query Account --output text) || fail 'AWS-Zugangsdaten prüfen.'
   [[ "$ACCOUNT" =~ ^[0-9]{12}$ ]] || fail 'Ungültige AWS-Account-ID.'
@@ -161,11 +162,14 @@ terraform_restore(){
   verify_remote_state
   terraform -chdir="$TF_DIR" init -reconfigure -input=false
   terraform -chdir="$TF_DIR" validate
-  local plan
+  local plan plan_json
   plan=$(mktemp /tmp/cicd-lab-plan.XXXXXX)
   terraform -chdir="$TF_DIR" plan -input=false -out="$plan"
   # Fail closed on proposed deletions/replacements.
-  if terraform -chdir="$TF_DIR" show -json "$plan" | jq -e '[.resource_changes[]? | select(.change.actions | index("delete"))] | length > 0' >/dev/null; then
+  plan_json=$(terraform -chdir="$TF_DIR" show -json "$plan")
+  jq -e 'type == "object" and has("format_version")' <<< "$plan_json" >/dev/null ||
+    fail 'Terraform-Plan konnte nicht ausgewertet werden.'
+  if ! jq -e 'all(.resource_changes[]?; .change.actions | index("delete") | not)' <<< "$plan_json" >/dev/null; then
     rm -f "$plan"; fail 'Terraform plant Löschen/Ersetzen. Kein automatisches Apply.'
   fi
   if confirm 'Terraform-Plan anwenden?'; then
@@ -304,63 +308,67 @@ sync_terraform_roles(){
   done
 }
 
+sync_ecs_role(){
+  local role=GitHubActions-ECS-Deploy-Role
+  local arn="arn:aws:iam::$ACCOUNT:role/$role"
+  local actual
+  awsx iam get-role --role-name "$role" >/dev/null
+  gh variable set ECS_DEPLOY_ROLE_ARN --repo "$REPO" --body "$arn"
+  actual=$(gh variable get ECS_DEPLOY_ROLE_ARN --repo "$REPO" --json value --jq '.value')
+  [[ "$actual" == "$arn" ]] || fail 'GitHub-Variable für ECS stimmt nicht.'
+}
+
 image_exists(){
   awsx ecr describe-images --repository-name "$ECR_NAME" --image-ids "imageTag=$1" >/dev/null 2>&1
 }
 current_sha(){ gh api "repos/$REPO/commits/main" --jq '.sha'; }
 run_pipeline(){
   verify_git
-  log 'GitHub Actions / ECR'
-  local sha run_id event
-  sha=$(current_sha)
+  log 'GitHub Actions / ECR / Fargate'
+  local sha run_id restore_id attempt
+  sha=$(git -C "$ROOT" rev-parse HEAD)
   [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || fail 'Ungültiger GitHub Commit-SHA.'
-  if image_exists "$sha"; then
-    echo "Docker-Image für Commit $sha bereits in ECR; kein erneuter Build nötig."
-    return
-  fi
-  # Prefer any push-triggered workflow for this SHA, avoiding an immutable-tag collision.
-  run_id=$(gh run list -R "$REPO" --workflow aws-cicd.yml --branch main --commit "$sha" --limit 10 --json databaseId --jq '.[0].databaseId // empty')
-  if [[ -z "$run_id" ]]; then
-    # A just-completed Git push can take a few seconds to create its workflow run.
-    for attempt in {1..12}; do
-      sleep 5
-      run_id=$(gh run list -R "$REPO" --workflow aws-cicd.yml --branch main --commit "$sha" --limit 10 --json databaseId --jq '.[0].databaseId // empty')
-      [[ -n "$run_id" ]] && break
-    done
-  fi
-  if [[ -z "$run_id" ]]; then
-    gh workflow run aws-cicd.yml -R "$REPO" --ref main
-    for attempt in {1..30}; do
-      sleep 5
-      run_id=$(gh run list -R "$REPO" --workflow aws-cicd.yml --branch main --commit "$sha" --limit 10 --json databaseId --jq '.[0].databaseId // empty')
-      [[ -n "$run_id" ]] && break
-    done
-  fi
-  [[ -n "$run_id" ]] || fail 'GitHub-Actions-Lauf nicht gefunden.'
-  echo "GitHub-Actions-Lauf: $run_id"
-  gh run watch "$run_id" -R "$REPO" --exit-status || fail 'CI/CD-Pipeline fehlgeschlagen.'
-  for attempt in {1..12}; do
-    if image_exists "$sha"; then
-        echo "Image bestätigt: $sha"; return
-    fi
+  restore_id="restore-$ACCOUNT-$(date +%s)-$$"
+
+  # A previous run or image may belong to an earlier sandbox. Always start
+  # a new run, which reuses the image in this account if it already exists.
+  gh workflow run aws-cicd.yml -R "$REPO" --ref main -f "restore_id=$restore_id"
+  for attempt in {1..30}; do
+    run_id=$(gh run list -R "$REPO" --workflow aws-cicd.yml --branch main --commit "$sha" \
+      --event workflow_dispatch --limit 20 --json databaseId,displayTitle \
+      --jq ".[] | select(.displayTitle == \"AWS CI/CD $restore_id\") | .databaseId")
+    [[ -n "$run_id" ]] && break
     sleep 5
   done
-  fail 'Pipeline beendet, aber ECR-Image für Commit fehlt.'
+  [[ -n "$run_id" ]] || fail 'Restore-Lauf für diesen main-Commit nicht gefunden.'
+  echo "GitHub-Actions-Lauf: https://github.com/$REPO/actions/runs/$run_id"
+  gh run watch "$run_id" -R "$REPO" --exit-status || fail 'CI/CD-Pipeline fehlgeschlagen.'
+  image_exists "$sha" || fail 'ECR-Image für den geprüften Commit fehlt im Sandbox-Account.'
+  DEPLOY_SHA=$sha
 }
 deploy_web(){
   preflight; need curl
   log 'EC2-Deployment über SSM'
   local sha ids instance registry image params command_id result status ip
   need gh
-  sha=$(current_sha)
+  sha=${DEPLOY_SHA:-$(current_sha)}
   image_exists "$sha" || fail "ECR-Image für main ($sha) fehlt. Zuerst --restore ausführen."
   ids=$(awsx ec2 describe-instances --filters 'Name=tag:Name,Values=cicd-webserver' 'Name=tag:Project,Values=cicd-lab' 'Name=instance-state-name,Values=running' --query 'Reservations[].Instances[].InstanceId' --output text)
   local -a arr=(); read -r -a arr <<< "$ids"
   [[ ${#arr[@]} -eq 1 ]] || fail "Erwartet genau eine laufende EC2-Instanz; gefunden ${#arr[@]}."
   instance=${arr[0]}
+  local ping_status attempt
+  for attempt in {1..36}; do
+    ping_status=$(awsx ssm describe-instance-information \
+      --filters "Key=InstanceIds,Values=$instance" \
+      --query 'InstanceInformationList[0].PingStatus' --output text)
+    [[ "$ping_status" == Online ]] && break
+    sleep 5
+  done
+  [[ "$ping_status" == Online ]] || fail "SSM-Agent für $instance ist nicht online."
   registry="$ACCOUNT.dkr.ecr.$REGION.amazonaws.com"
   image="$registry/$ECR_NAME:$sha"
-  params=$(jq -nc --arg region "$REGION" --arg registry "$registry" --arg image "$image" '{commands:["set -eu",("aws ecr get-login-password --region "+$region+" | docker login --username AWS --password-stdin "+$registry),("docker pull "+$image),"docker logout >/dev/null 2>&1 || true","docker rm -f cicd-webserver 2>/dev/null || true",("docker run -d --name cicd-webserver --restart unless-stopped -p 80:80 "+$image),"docker ps --filter name=cicd-webserver"]}')
+  params=$(jq -nc --arg region "$REGION" --arg registry "$registry" --arg image "$image" '{commands:["set -eu","cloud-init status --wait",("aws ecr get-login-password --region "+$region+" | docker login --username AWS --password-stdin "+$registry),("docker pull "+$image),"docker logout >/dev/null 2>&1 || true","docker rm -f cicd-webserver 2>/dev/null || true",("docker run -d --name cicd-webserver --restart unless-stopped -p 80:80 "+$image),"docker ps --filter name=cicd-webserver"]}')
   command_id=$(awsx ssm send-command --instance-ids "$instance" --document-name AWS-RunShellScript --parameters "$params" --query 'Command.CommandId' --output text)
   if ! awsx ssm wait command-executed --command-id "$command_id" --instance-id "$instance"; then
     echo 'SSM Waiter meldet noch keinen Erfolg; Detailstatus folgt.' >&2
@@ -393,8 +401,9 @@ restore(){
   prepare_configuration
   terraform_restore
   sync_operator_profile
-  sync_github
   sync_terraform_roles
+  sync_ecs_role
+  sync_github
   run_pipeline
   deploy_web
   log 'Wiederherstellung abgeschlossen.'
