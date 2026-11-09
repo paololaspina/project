@@ -31,7 +31,10 @@ need(){ command -v "$1" >/dev/null 2>&1 || fail "Benötigt: $1"; }
 awsx(){ aws --profile "$PROFILE" --region "$REGION" "$@"; }
 confirm(){ local a; read -r -p "$1 [ja/NEIN] " a; [[ "$a" == ja ]]; }
 preflight(){
-  need aws; need jq; need git; need terraform; need python3
+  need aws; need jq; need git
+  if [[ "$MODE" == --restore ]]; then
+    need terraform; need python3
+  fi
   [[ "$REGION" == us-east-1 ]] || fail 'Dieses Lab verwendet us-east-1.'
   [[ -d "$TF_DIR" && -f "$WORKFLOW" ]] || fail 'Terraform-Ordner oder AWS-Workflow fehlt.'
   ACCOUNT=$(awsx sts get-caller-identity --query Account --output text) || fail 'AWS-Zugangsdaten prüfen.'
