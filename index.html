@@ -1,11 +1,145 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="de">
-  <head>
-    <meta charset="UTF-8" />
-    <title>Meine CI/CD-Webseite</title>
-  </head>
-  <body>
-    <h1>Hallo aus der Pipeline! 🚀</h1>
-    <p>Version: 1.0</p>
-  </body>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#080e1c">
+  <title>Moin. | AWS DevLab</title>
+  <style>
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      color: #fff;
+      background:
+        radial-gradient(ellipse at 50% 30%, #223b65, transparent 60%),
+        #080e1c;
+    }
+
+    .card {
+      width: min(100%, 760px);
+      padding: clamp(28px, 6vw, 56px);
+      background: rgba(255,255,255,.045);
+      border: 1px solid rgba(255,255,255,.12);
+      border-radius: 28px;
+      box-shadow: 0 30px 100px rgba(0,0,0,.35);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+    }
+
+    header, footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .brand {
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: .15em;
+      color: #aabde0;
+    }
+
+    .status {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 9px 14px;
+      border-radius: 50px;
+      border: 1px solid #285b49;
+      background: #152b28;
+      color: #a6efd0;
+      font-size: 12px;
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #61e8b0;
+      box-shadow: 0 0 15px #61e8b0;
+      animation: pulse 2s infinite;
+    }
+
+    main {
+      padding: 95px 0 85px;
+      text-align: center;
+    }
+
+    h1 {
+      margin: 0 0 24px;
+      font-size: clamp(70px, 12vw, 112px);
+      letter-spacing: -.075em;
+      line-height: 1;
+    }
+
+    .message {
+      margin: 0;
+      font-size: clamp(19px, 3vw, 27px);
+      color: #d1ddf4;
+    }
+
+    .greeting {
+      margin: 34px 0;
+      color: #96a9ca;
+      font-size: 16px;
+    }
+
+    .tech {
+      display: inline-block;
+      padding: 12px 20px;
+      border-radius: 50px;
+      background: #1a2b46;
+      color: #b8cae9;
+      font-size: 12px;
+      letter-spacing: .04em;
+    }
+
+    footer {
+      padding-top: 22px;
+      border-top: 1px solid rgba(255,255,255,.1);
+      color: #7c90b2;
+      font-size: 11px;
+      letter-spacing: .08em;
+    }
+
+    @keyframes pulse {
+      50% { opacity: .35; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .dot { animation: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <header>
+      <span class="brand">DEVLAB / AWS</span>
+      <span class="status">
+        <span class="dot"></span>
+        System online
+      </span>
+    </header>
+
+    <main>
+      <h1>Moin.</h1>
+      <p class="message">Diese Testinstanz funktioniert.</p>
+      <p class="greeting">Beste Grüße aus dem Off.</p>
+      <span class="tech">AWS · Terraform · Docker</span>
+    </main>
+
+    <footer>
+      <span>DEVLAB / TEST ENVIRONMENT</span>
+      <span>AUTOMATED DEPLOYMENT</span>
+    </footer>
+  </div>
+</body>
 </html>
