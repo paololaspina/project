@@ -30,6 +30,12 @@ resource "aws_instance" "web" {
     systemctl enable --now docker
   EOF
 
+  # Resolve the latest AMI on creation without replacing the running lab
+  # instance when Amazon updates the public SSM parameter.
+  lifecycle {
+    ignore_changes = [ami]
+  }
+
   root_block_device {
     volume_size = 10
     volume_type = "gp3"

@@ -49,6 +49,12 @@ resource "aws_iam_role_policy" "terraform_plan_readonly" {
         Effect = "Allow"
         Action = [
           "ec2:Describe*",
+          "ecs:DescribeClusters",
+          "ecs:DescribeServices",
+          "ecs:DescribeTaskDefinition",
+          "ecs:ListTagsForResource",
+          "logs:DescribeLogGroups",
+          "logs:ListTagsForResource",
           "iam:GetRole",
           "iam:GetRolePolicy",
           "iam:GetInstanceProfile",
@@ -62,6 +68,8 @@ resource "aws_iam_role_policy" "terraform_plan_readonly" {
           "cloudwatch:DescribeAlarms",
           "cloudwatch:ListTagsForResource",
           "cloudwatch:GetDashboard",
+          "sns:GetTopicAttributes",
+          "sns:ListTagsForResource",
           "ssm:GetParameter",
           "sts:GetCallerIdentity"
         ]

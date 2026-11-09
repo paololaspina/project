@@ -224,7 +224,7 @@ confirm(){ return 0; }
 terraform(){
   case " $* " in
     *" show -json "*)
-      printf '%s\\n' '{"resource_changes":[{"change":{"actions":["delete","create"]}}]}'
+      printf '%s\\n' '{"format_version":"1.2","resource_changes":[{"change":{"actions":["delete","create"]}}]}'
       ;;
     *" apply "*)
       echo UNSAFE_APPLY
@@ -242,12 +242,16 @@ terraform_restore
     def test_14_failed_pipeline_blocks_deployment(self):
         result = self.run_isolated_function("""
 verify_git(){ :; }
-current_sha(){ printf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\n'; }
-image_exists(){ return 1; }
+git(){ printf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\n'; }
+image_exists(){ return 0; }
 
 gh(){
   case " $* " in
+    *" workflow run "*)
+      [[ "$*" == *"restore_id=restore-"* ]]
+      ;;
     *" run list "*)
+      [[ "$*" == *"--event workflow_dispatch"* && "$*" == *"displayTitle"* ]] || return 1
       printf '12345\\n'
       ;;
     *" run watch "*)
@@ -363,6 +367,7 @@ terraform_restore(){
   [[ "$MOCK_FAILURE" != terraform ]]
 }
 sync_terraform_roles(){ echo GITHUB_ROLES; }
+sync_ecs_role(){ echo ECS_ROLE; }
 sync_operator_profile(){ echo OPERATOR_PROFILE; }
 sync_github(){
   echo GIT_SYNC
@@ -401,6 +406,8 @@ restore
             "CONFIG",
             "TERRAFORM",
             "OPERATOR_PROFILE",
+            "GITHUB_ROLES",
+            "ECS_ROLE",
             "GIT_SYNC",
             "PIPELINE",
             "DEPLOY",
