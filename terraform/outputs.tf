@@ -9,8 +9,8 @@ output "ec2_public_ip" {
 }
 
 output "website_url" {
-  description = "HTTP-Adresse unserer Webseite"
-  value       = "http://${aws_instance.web.public_ip}"
+  description = "Öffentliche HTTP-Adresse des EC2-Load-Balancers"
+  value       = "http://${aws_lb.web.dns_name}"
 }
 
 
@@ -43,4 +43,9 @@ output "cloudwatch_dashboard_url" {
 output "ecr_repository_url" {
   description = "Docker-Repository fuer unsere CI/CD-Pipeline"
   value       = aws_ecr_repository.web.repository_url
+}
+
+output "ec2_secondary_instance_id" {
+  description = "ID der zweiten EC2-Instanz hinter dem ALB"
+  value       = aws_instance.web_secondary.id
 }

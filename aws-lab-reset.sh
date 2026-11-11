@@ -374,18 +374,21 @@ run_pipeline(){
   image_exists "$sha" || fail 'ECR-Image für den geprüften Commit fehlt im Sandbox-Account.'
   DEPLOY_SHA=$sha
 }
-deploy_web(){
-  preflight; need curl
-  log 'EC2-Deployment über SSM'
-  local sha ids instance registry image params command_id result status ip
-  need gh
-  sha=${DEPLOY_SHA:-$(current_sha)}
-  image_exists "$sha" || fail "ECR-Image für main ($sha) fehlt. Zuerst --restore ausführen."
-  ids=$(awsx ec2 describe-instances --filters 'Name=tag:Name,Values=cicd-webserver' 'Name=tag:Project,Values=cicd-lab' 'Name=instance-state-name,Values=running' --query 'Reservations[].Instances[].InstanceId' --output text)
-  local -a arr=(); read -r -a arr <<< "$ids"
-  [[ ${#arr[@]} -eq 1 ]] || fail "Erwartet genau eine laufende EC2-Instanz; gefunden ${#arr[@]}."
-  instance=${arr[0]}
-  local ping_status attempt
+wait_for_ec2_target(){
+  local target_group=$1 instance=$2 state attempt
+  for attempt in {1..36}; do
+    state=$(awsx elbv2 describe-target-health --target-group-arn "$target_group" \
+      --targets "Id=$instance,Port=80" --query 'TargetHealthDescriptions[0].TargetHealth.State' --output text)
+    [[ "$state" != healthy ]] || return 0
+    sleep 5
+  done
+  awsx elbv2 describe-target-health --target-group-arn "$target_group" --targets "Id=$instance,Port=80"
+  fail "ALB-Ziel $instance ist nicht healthy."
+}
+
+deploy_ec2_target(){
+  local instance=$1 params=$2 ping_status attempt command_id result status
+  log "SSM-Deployment auf $instance"
   for attempt in {1..36}; do
     ping_status=$(awsx ssm describe-instance-information \
       --filters "Key=InstanceIds,Values=$instance" \
@@ -394,23 +397,60 @@ deploy_web(){
     sleep 5
   done
   [[ "$ping_status" == Online ]] || fail "SSM-Agent für $instance ist nicht online."
-  registry="$ACCOUNT.dkr.ecr.$REGION.amazonaws.com"
-  image="$registry/$ECR_NAME:$sha"
-  params=$(jq -nc --arg region "$REGION" --arg registry "$registry" --arg image "$image" '{commands:["set -eu","cloud-init status --wait",("aws ecr get-login-password --region "+$region+" | docker login --username AWS --password-stdin "+$registry),("docker pull "+$image),"docker logout >/dev/null 2>&1 || true","docker rm -f cicd-webserver 2>/dev/null || true",("docker run -d --name cicd-webserver --restart unless-stopped -p 80:80 "+$image),"docker ps --filter name=cicd-webserver"]}')
-  command_id=$(awsx ssm send-command --instance-ids "$instance" --document-name AWS-RunShellScript --parameters "$params" --query 'Command.CommandId' --output text)
+  command_id=$(awsx ssm send-command --instance-ids "$instance" --document-name AWS-RunShellScript \
+    --parameters "$params" --query 'Command.CommandId' --output text)
   if ! awsx ssm wait command-executed --command-id "$command_id" --instance-id "$instance"; then
-    echo 'SSM Waiter meldet noch keinen Erfolg; Detailstatus folgt.' >&2
+    echo "SSM Waiter meldet für $instance noch keinen Erfolg; Detailstatus folgt." >&2
   fi
   result=$(awsx ssm get-command-invocation --command-id "$command_id" --instance-id "$instance" --output json)
   status=$(jq -r '.Status' <<< "$result")
   if [[ "$status" != Success ]]; then
     jq '{Status,StandardErrorContent,StandardOutputContent}' <<< "$result"
-    fail "SSM-Deployment fehlgeschlagen: $status"
+    fail "SSM-Deployment auf $instance fehlgeschlagen: $status"
   fi
-  ip=$(awsx ec2 describe-instances --instance-ids "$instance" --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)
-  [[ "$ip" != None && -n "$ip" ]] || fail 'EC2 hat keine öffentliche IP.'
-  curl --retry 8 --retry-delay 3 --fail --silent --show-error --max-time 10 "http://$ip/" >/dev/null || fail "Website unter http://$ip/ nicht erreichbar"
-  echo "ERFOLG: Website erreichbar: http://$ip/"
+}
+
+deploy_web(){
+  preflight; need curl; need gh
+  log 'EC2-Deployment hinter dem Application Load Balancer'
+  local sha registry image params target_group targets instance dns
+  local -a instances
+  sha=${DEPLOY_SHA:-$(current_sha)}
+  [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || fail 'Ungültiger GitHub Commit-SHA.'
+  image_exists "$sha" || fail "ECR-Image für main ($sha) fehlt. Zuerst --restore ausführen."
+  target_group=$(awsx elbv2 describe-target-groups --names cicd-lab-web \
+    --query 'TargetGroups[0].TargetGroupArn' --output text)
+  targets=$(awsx elbv2 describe-target-health --target-group-arn "$target_group" \
+    --query 'TargetHealthDescriptions[].Target.Id' --output json)
+  jq -e 'length == 2 and (unique | length == 2) and all(.[]; test("^i-[0-9a-f]+$"))' <<< "$targets" >/dev/null ||
+    fail 'Der ALB erwartet genau zwei verschiedene EC2-Ziele.'
+  mapfile -t instances < <(jq -r '.[]' <<< "$targets")
+
+  registry="$ACCOUNT.dkr.ecr.$REGION.amazonaws.com"
+  image="$registry/$ECR_NAME:$sha"
+  params=$(jq -nc --arg region "$REGION" --arg registry "$registry" --arg image "$image" '{
+    commands: [
+      "set -eu",
+      "cloud-init status --wait || systemctl is-active --quiet docker",
+      ("aws ecr get-login-password --region " + $region + " | docker login --username AWS --password-stdin " + $registry),
+      ("docker pull " + $image),
+      "docker logout >/dev/null 2>&1 || true",
+      "docker rm -f cicd-webserver 2>/dev/null || true",
+      ("docker run -d --name cicd-webserver --restart unless-stopped -p 80:80 " + $image),
+      "curl --fail --silent --show-error --retry 5 --retry-connrefused --max-time 5 http://127.0.0.1/ >/dev/null"
+    ]
+  }')
+  for instance in "${instances[@]}"; do
+    deploy_ec2_target "$instance" "$params"
+    wait_for_ec2_target "$target_group" "$instance"
+  done
+
+  dns=$(awsx elbv2 describe-load-balancers --names cicd-lab-web \
+    --query 'LoadBalancers[0].DNSName' --output text)
+  [[ -n "$dns" && "$dns" != None ]] || fail 'Der ALB hat keinen DNS-Namen.'
+  curl --retry 8 --retry-all-errors --retry-delay 3 --fail --silent --show-error \
+    --max-time 10 "http://$dns/" >/dev/null || fail "Website unter http://$dns/ nicht erreichbar"
+  echo "ERFOLG: Beide EC2-Ziele sind healthy. Website erreichbar: http://$dns/"
 }
 check(){
   preflight
