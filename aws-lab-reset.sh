@@ -33,7 +33,7 @@ confirm(){ local a; read -r -p "$1 [ja/NEIN] " a; [[ "$a" == ja ]]; }
 preflight(){
   need aws; need jq; need git
   if [[ "$MODE" == --restore ]]; then
-    need terraform; need python3
+    need terraform; need python3; need curl
   fi
   [[ "$REGION" == us-east-1 ]] || fail 'Dieses Lab verwendet us-east-1.'
   [[ -d "$TF_DIR" && -f "$WORKFLOW" ]] || fail 'Terraform-Ordner oder AWS-Workflow fehlt.'
@@ -160,6 +160,31 @@ verify_remote_state(){
     fi
   fi
 }
+prepare_loki_lambda(){
+  log 'Lambda-Paket für Grafana Loki prüfen'
+  local manifest="$TF_DIR/loki-lambda-release.json"
+  local archive="$TF_DIR/.terraform/lambda-promtail.zip"
+  local url expected actual download
+  url=$(jq -er '.url' "$manifest")
+  expected=$(jq -er '.sha256_base64' "$manifest")
+  mkdir -p "$(dirname "$archive")"
+  if [[ -f "$archive" ]]; then
+    actual=$(loki_package_hash "$archive")
+    [[ "$actual" != "$expected" ]] || return 0
+  fi
+  download=$(mktemp "${archive}.XXXXXX")
+  if ! curl --fail --silent --show-error --location --retry 3 --max-time 120 --output "$download" "$url" ||
+    [[ "$(loki_package_hash "$download")" != "$expected" ]]; then
+    rm -f "$download"
+    fail 'Das Lambda-Paket konnte nicht verifiziert werden.'
+  fi
+  mv -f "$download" "$archive"
+}
+
+loki_package_hash(){
+  python3 -c 'import base64, hashlib, sys; print(base64.b64encode(hashlib.sha256(open(sys.argv[1], "rb").read()).digest()).decode())' "$1"
+}
+
 terraform_restore(){
   log 'Terraform initialisieren und planen'
   verify_remote_state
@@ -402,6 +427,7 @@ restore(){
   confirm 'Wiederherstellung beginnen?' || fail 'Abgebrochen.'
   ensure_bucket
   prepare_configuration
+  prepare_loki_lambda
   terraform_restore
   sync_operator_profile
   sync_terraform_roles
