@@ -14,3 +14,9 @@ data "aws_subnet" "default" {
   availability_zone = data.aws_availability_zones.available.names[0]
   default_for_az    = true
 }
+
+data "aws_subnet" "secondary" {
+  vpc_id            = data.aws_vpc.default.id
+  availability_zone = data.aws_availability_zones.available.names[1]
+  default_for_az    = true
+}

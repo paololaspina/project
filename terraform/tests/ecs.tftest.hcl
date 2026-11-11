@@ -1,6 +1,6 @@
 mock_provider "aws" {
   mock_data "aws_availability_zones" {
-    defaults = { names = ["us-east-1a"] }
+    defaults = { names = ["us-east-1a", "us-east-1b"] }
   }
 
   mock_data "aws_caller_identity" {
@@ -51,5 +51,24 @@ run "empty_ecr_bootstrap" {
   assert {
     condition     = aws_instance.web.instance_type == "t3.micro" && aws_ecr_repository.web.image_tag_mutability == "IMMUTABLE"
     error_message = "Keep the EC2 webserver and immutable ECR tags."
+  }
+}
+
+run "two_ec2_targets_behind_alb" {
+  command = plan
+
+  assert {
+    condition     = data.aws_subnet.default.availability_zone != data.aws_subnet.secondary.availability_zone
+    error_message = "Use two different Availability Zones for the public ALB."
+  }
+
+  assert {
+    condition     = length(aws_lb_target_group_attachment.web) == 2 && aws_lb_listener.http.port == 80
+    error_message = "Both EC2 instances must be registered with the HTTP load balancer."
+  }
+
+  assert {
+    condition     = aws_vpc_security_group_ingress_rule.ec2_from_alb.cidr_ipv4 == null
+    error_message = "EC2 HTTP ingress must come from the ALB security group."
   }
 }

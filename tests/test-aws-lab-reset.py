@@ -648,5 +648,38 @@ echo WIEDERHOLUNG_OK
         self.assertNotIn("UNERWARTETER_AUFRUF", output)
 
 
+    def test_22_deploy_waits_for_both_alb_targets(self):
+        result = self.run_isolated_function(r"""
+preflight(){ ACCOUNT=123456789012; }
+need(){ :; }
+DEPLOY_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+image_exists(){ :; }
+deploy_ec2_target(){
+  jq -e '.commands[] | select(startswith("docker pull ") and endswith(":aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))' <<< "$2" >/dev/null
+  echo "DEPLOY $1"
+}
+wait_for_ec2_target(){ echo "HEALTHY $2"; }
+awsx(){
+  case "$1 $2" in
+    "elbv2 describe-target-groups") echo arn:test ;;
+    "elbv2 describe-target-health") echo '["i-0123","i-0456"]' ;;
+    "elbv2 describe-load-balancers") echo example.elb.amazonaws.com ;;
+    *) return 99 ;;
+  esac
+}
+curl(){
+  [[ "$*" == *"http://example.elb.amazonaws.com/" ]]
+  echo ALB_SMOKE >&2
+}
+deploy_web
+""")
+        output = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 0, output)
+        expected = ["DEPLOY i-0123", "HEALTHY i-0123",
+                    "DEPLOY i-0456", "HEALTHY i-0456", "ALB_SMOKE"]
+        positions = [output.index(item) for item in expected]
+        self.assertEqual(positions, sorted(positions))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
