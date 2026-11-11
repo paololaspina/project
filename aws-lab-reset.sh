@@ -437,7 +437,7 @@ deploy_web(){
       "docker logout >/dev/null 2>&1 || true",
       "docker rm -f cicd-webserver 2>/dev/null || true",
       ("docker run -d --name cicd-webserver --restart unless-stopped -p 80:80 " + $image),
-      "curl --fail --silent --show-error --retry 5 --retry-connrefused --max-time 5 http://127.0.0.1/ >/dev/null"
+      "curl --fail --silent --show-error --retry 12 --retry-all-errors --retry-delay 2 --retry-max-time 30 --max-time 5 http://127.0.0.1/ >/dev/null || { docker logs --tail 30 cicd-webserver >&2; exit 1; }"
     ]
   }')
   for instance in "${instances[@]}"; do
