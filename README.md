@@ -28,6 +28,15 @@ bash tests/test-ecs-deploy.sh
 bash test.sh
 ```
 
+## Grafana Cloud mit CloudWatch verbinden
+
+1. `main` aktualisieren und `./aws-lab-reset.sh --restore` mit dem Profil `lab` ausführen. Der bestätigte Terraform-Plan erstellt auch die IAM-Rolle `GrafanaCloudWatchReadOnly`. Die Vertrauensdaten des Grafana-Stacks stehen in `terraform/grafana-cloudwatch.json`.
+2. Die Rollen-ARN mit `AWS_PROFILE=lab terraform -chdir=terraform output -raw grafana_cloudwatch_role_arn` ausgeben.
+3. In Grafana unter **Connections → Data sources → cloudwatch → Settings** bei **Grafana Assume Role** die ausgegebene ARN einfügen, **Default Region** auf `us-east-1` setzen und **Save & test** wählen.
+4. In **Explore** mit der CloudWatch-Datenquelle `CPUUtilization` aus `AWS/EC2` bzw. `AWS/ECS` abfragen. Für nginx-Logs auf **Logs** umschalten und die Gruppe `/ecs/cicd-webserver` auswählen.
+
+Bei einem Sandbox-Wechsel erstellt der Restore die Rolle im neuen Konto. Danach die neue ARN in derselben Grafana-Datenquelle speichern und erneut testen.
+
 ## GitHub Actions: OIDC-Anmeldung bei AWS
 
 ### Ablauf und konkrete Fundstellen
