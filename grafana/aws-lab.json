@@ -1,0 +1,148 @@
+{
+  "uid": "cicd-aws-lab",
+  "title": "AWS DevLab – EC2 und Fargate",
+  "tags": [
+    "cicd-lab",
+    "aws"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "1m",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Fargate CPU",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "cloudwatch",
+        "uid": "__CLOUDWATCH_UID__"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "cloudwatch",
+            "uid": "__CLOUDWATCH_UID__"
+          },
+          "queryMode": "Metrics",
+          "metricQueryType": 0,
+          "metricEditorMode": 0,
+          "region": "us-east-1",
+          "namespace": "AWS/ECS",
+          "metricName": "CPUUtilization",
+          "statistic": "Average",
+          "period": "",
+          "matchExact": true,
+          "dimensions": {
+            "ClusterName": "cicd-webserver",
+            "ServiceName": "cicd-webserver"
+          }
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Fargate Arbeitsspeicher",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "cloudwatch",
+        "uid": "__CLOUDWATCH_UID__"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "cloudwatch",
+            "uid": "__CLOUDWATCH_UID__"
+          },
+          "queryMode": "Metrics",
+          "metricQueryType": 0,
+          "metricEditorMode": 0,
+          "region": "us-east-1",
+          "namespace": "AWS/ECS",
+          "metricName": "MemoryUtilization",
+          "statistic": "Average",
+          "period": "",
+          "matchExact": true,
+          "dimensions": {
+            "ClusterName": "cicd-webserver",
+            "ServiceName": "cicd-webserver"
+          }
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "EC2 CPU",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 24,
+        "h": 8
+      },
+      "datasource": {
+        "type": "cloudwatch",
+        "uid": "__CLOUDWATCH_UID__"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "cloudwatch",
+            "uid": "__CLOUDWATCH_UID__"
+          },
+          "queryMode": "Metrics",
+          "metricQueryType": 0,
+          "metricEditorMode": 0,
+          "region": "us-east-1",
+          "namespace": "AWS/EC2",
+          "metricName": "CPUUtilization",
+          "statistic": "Average",
+          "period": "",
+          "matchExact": true,
+          "dimensions": {
+            "InstanceId": "*"
+          }
+        }
+      ]
+    }
+  ]
+}
