@@ -28,6 +28,12 @@ bash tests/test-ecs-deploy.sh
 bash test.sh
 ```
 
+### Unterschiedliche CPU-Last auf den EC2-Zielen
+
+`bash scripts/ec2-load.sh` startet über SSM für sechs Minuten einen CPU-Worker auf `cicd-webserver` und zwei auf `cicd-webserver-2`. Das Skript prüft vorher beide ALB-Ziele und gibt pro Instanz die SSM-Command-ID aus. Die Worker laufen mit niedriger Priorität und beenden sich automatisch. Eine andere Laufzeit in Sekunden zwischen 30 und 600 kann als Argument angegeben werden.
+
+Im Grafana-Dashboard **AWS DevLab – EC2 und Fargate** zeigt das Panel **EC2 CPU** die Kurven nach `InstanceId`. Die IDs stehen in der Skriptausgabe. Bei EC2-Basismonitoring erscheinen die Daten in Fünf-Minuten-Intervallen.
+
 ## Grafana Cloud mit CloudWatch verbinden
 
 1. `main` aktualisieren und `./aws-lab-reset.sh --restore` mit dem Profil `lab` ausführen. Der bestätigte Terraform-Plan erstellt auch die IAM-Rolle `GrafanaCloudWatchReadOnly`. Die Vertrauensdaten des Grafana-Stacks stehen in `terraform/grafana-cloudwatch.json`.
