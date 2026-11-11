@@ -44,12 +44,20 @@ Lambda Promtail leitet neue nginx-Einträge aus `/ecs/cicd-webserver` an Grafana
 Vor dem ersten Restore pro Sandbox-Konto einen Grafana-Cloud-Access-Policy-Token mit `logs:write` als SecureString in AWS Systems Manager Parameter Store hinterlegen. Den Token im Bash-Terminal verdeckt eingeben.
 
 ```bash
-read -rsp 'Grafana Loki Token: ' LOKI_TOKEN
-printf '\n'
-printf '%s' "$LOKI_TOKEN" |
-  jq -Rs '{Name:"/cicd-lab/grafana/loki-token",Type:"SecureString",Value:.,Overwrite:true}' |
-  aws --profile lab --region us-east-1 ssm put-parameter --cli-input-json file:///dev/stdin
-unset LOKI_TOKEN
+(
+  set -e
+  umask 077
+  token_file=$(mktemp /dev/shm/grafana-loki.XXXXXX)
+  trap 'rm -f -- "$token_file"' EXIT
+  read -rsp 'Grafana Loki Token: ' LOKI_TOKEN </dev/tty
+  printf '\n'
+  [[ -n "$LOKI_TOKEN" ]] || { echo 'Kein Token eingegeben.' >&2; exit 1; }
+  printf '%s' "$LOKI_TOKEN" > "$token_file"
+  unset LOKI_TOKEN
+  aws --profile lab --region us-east-1 ssm put-parameter \
+    --name /cicd-lab/grafana/loki-token --type SecureString \
+    --value "file://$token_file" --overwrite
+)
 ```
 
 Anschließend `./aws-lab-reset.sh --restore` ausführen. Die Lambda-Funktion liest den Token zur Laufzeit. Bei einem neuen AWS-Konto den SecureString vor dem Restore erneut hinterlegen.
