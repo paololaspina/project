@@ -42,7 +42,7 @@ jobs:
           persist-credentials: false
       - uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::639493421189:role/GitHubActions-CICD-Role
+          role-to-assume: arn:aws:iam::625830751097:role/GitHubActions-CICD-Role
           aws-region: us-east-1
       - id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
