@@ -656,6 +656,7 @@ DEPLOY_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 image_exists(){ :; }
 deploy_ec2_target(){
   jq -e '.commands[] | select(startswith("docker pull ") and endswith(":aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))' <<< "$2" >/dev/null
+  jq -e '.commands[] | select(startswith("curl ") and contains("--retry-all-errors"))' <<< "$2" >/dev/null
   echo "DEPLOY $1"
 }
 wait_for_ec2_target(){ echo "HEALTHY $2"; }
