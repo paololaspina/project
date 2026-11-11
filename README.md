@@ -41,9 +41,9 @@ Bei einem Sandbox-Wechsel erstellt der Restore die Rolle im neuen Konto. Danach 
 
 Das Dashboard in `grafana/aws-lab.json` zeigt EC2-CPU sowie CPU und Arbeitsspeicher des Fargate-Dienstes. Die UID `cicd-aws-lab` bleibt bei jedem Deployment gleich.
 
-1. In Grafana unter **Administration → Users and access → Service accounts** ein Konto für GitHub Actions mit Dashboard-Schreib- und Leserechten anlegen. Für das Dashboard im Hauptordner funktioniert die Rolle **Editor**. Ein Service-Account-Token erzeugen und als Repository-Secret `GRAFANA_DASHBOARD_TOKEN` hinterlegen.
+1. In Grafana unter **Administration → Users and access → Service accounts** ein Konto für GitHub Actions mit Dashboard-Schreibrechten anlegen. Für das Dashboard im Hauptordner funktioniert die Rolle **Editor**. Ein Service-Account-Token erzeugen und als Repository-Secret `GRAFANA_DASHBOARD_TOKEN` hinterlegen.
 2. Die CloudWatch-Datenquelle in Grafana öffnen und ihre UID aus der URL nach `/connections/datasources/edit/` kopieren. Die UID in GitHub unter **Settings → Secrets and variables → Actions → Variables** als `GRAFANA_CLOUDWATCH_UID` speichern.
-3. Unter **Actions → Grafana Dashboard → Run workflow** den Branch `main` wählen. Änderungen an der Dashboard-Datei oder dem Workflow auf `main` starten den Deploy automatisch. Der Job liest das Dashboard nach dem Upload zurück und verlinkt es in seiner Zusammenfassung.
+3. Unter **Actions → Grafana Dashboard → Run workflow** den Branch `main` wählen. Änderungen an der Dashboard-Datei oder dem Workflow auf `main` starten den Deploy automatisch. Der Job prüft die CloudWatch-UID vor dem Upload und verlinkt das Dashboard in seiner Zusammenfassung, sobald Grafana das Speichern bestätigt.
 
 Beim Sandbox-Reset die Rollen-ARN in der vorhandenen CloudWatch-Datenquelle aktualisieren. Dadurch bleibt ihre UID gültig und das Dashboard verwendet das neue AWS-Konto.
 
