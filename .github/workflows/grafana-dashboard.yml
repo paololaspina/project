@@ -24,7 +24,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - name: Deploy and verify Grafana dashboard
+      - name: Publish Grafana dashboard
         env:
           GRAFANA_URL: https://bravebrownie1942.grafana.net
           GRAFANA_DASHBOARD_TOKEN: ${{ secrets.GRAFANA_DASHBOARD_TOKEN }}
@@ -45,19 +45,16 @@ jobs:
             | {dashboard: ., overwrite: true, message: "Deploy from GitHub Actions"}
           ' "$dashboard" > "$RUNNER_TEMP/grafana-dashboard.json"
 
+          jq -e --arg ds "$CLOUDWATCH_UID" '
+            .dashboard | (.panels | length) > 0
+            and all(.panels[]; .datasource.uid == $ds and all(.targets[]; .datasource.uid == $ds))
+          ' "$RUNNER_TEMP/grafana-dashboard.json" >/dev/null
+
           curl --fail-with-body --silent --show-error --max-time 30 \
             --header "Authorization: Bearer $GRAFANA_DASHBOARD_TOKEN" \
             --header 'Content-Type: application/json' \
             --data-binary "@$RUNNER_TEMP/grafana-dashboard.json" \
             "$GRAFANA_URL/api/dashboards/db" |
             jq -e --arg uid "$uid" '.status == "success" and .uid == $uid'
-
-          curl --fail-with-body --silent --show-error --max-time 30 \
-            --header "Authorization: Bearer $GRAFANA_DASHBOARD_TOKEN" \
-            "$GRAFANA_URL/api/dashboards/uid/$uid" |
-            jq -e --arg uid "$uid" --arg ds "$CLOUDWATCH_UID" '
-              .dashboard | .uid == $uid and (.panels | length) > 0
-              and all(.panels[]; .datasource.uid == $ds and all(.targets[]; .datasource.uid == $ds))
-            '
 
           printf '[AWS DevLab Dashboard](%s/d/%s)\n' "$GRAFANA_URL" "$uid" >> "$GITHUB_STEP_SUMMARY"
