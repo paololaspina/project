@@ -1,0 +1,63 @@
+name: Grafana Dashboard
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - grafana/aws-lab.json
+      - .github/workflows/grafana-dashboard.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: grafana-dashboard
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Deploy and verify Grafana dashboard
+        env:
+          GRAFANA_URL: https://bravebrownie1942.grafana.net
+          GRAFANA_DASHBOARD_TOKEN: ${{ secrets.GRAFANA_DASHBOARD_TOKEN }}
+          CLOUDWATCH_UID: ${{ vars.GRAFANA_CLOUDWATCH_UID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$GRAFANA_DASHBOARD_TOKEN" || -z "$CLOUDWATCH_UID" ]]; then
+            echo "::error::Set the GRAFANA_DASHBOARD_TOKEN secret and GRAFANA_CLOUDWATCH_UID variable."
+            exit 1
+          fi
+
+          dashboard=grafana/aws-lab.json
+          uid=$(jq -er '.uid | select(test("^[A-Za-z0-9_-]+$"))' "$dashboard")
+          jq --arg uid "$CLOUDWATCH_UID" '
+            walk(if type == "object" and .type == "cloudwatch" and .uid == "__CLOUDWATCH_UID__"
+                 then .uid = $uid else . end)
+            | {dashboard: ., overwrite: true, message: "Deploy from GitHub Actions"}
+          ' "$dashboard" > "$RUNNER_TEMP/grafana-dashboard.json"
+
+          curl --fail-with-body --silent --show-error --max-time 30 \
+            --header "Authorization: Bearer $GRAFANA_DASHBOARD_TOKEN" \
+            --header 'Content-Type: application/json' \
+            --data-binary "@$RUNNER_TEMP/grafana-dashboard.json" \
+            "$GRAFANA_URL/api/dashboards/db" |
+            jq -e --arg uid "$uid" '.status == "success" and .uid == $uid'
+
+          curl --fail-with-body --silent --show-error --max-time 30 \
+            --header "Authorization: Bearer $GRAFANA_DASHBOARD_TOKEN" \
+            "$GRAFANA_URL/api/dashboards/uid/$uid" |
+            jq -e --arg uid "$uid" --arg ds "$CLOUDWATCH_UID" '
+              .dashboard | .uid == $uid and (.panels | length) > 0
+              and all(.panels[]; .datasource.uid == $ds and all(.targets[]; .datasource.uid == $ds))
+            '
+
+          printf '[AWS DevLab Dashboard](%s/d/%s)\n' "$GRAFANA_URL" "$uid" >> "$GITHUB_STEP_SUMMARY"
