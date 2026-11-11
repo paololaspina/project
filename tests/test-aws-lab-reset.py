@@ -362,6 +362,7 @@ ensure_bucket(){ echo S3; }
 ensure_ecr(){ echo ECR; }
 ensure_identity(){ echo IAM_OIDC; }
 prepare_configuration(){ echo CONFIG; }
+prepare_loki_lambda(){ echo LOKI_PACKAGE; }
 terraform_restore(){
   echo TERRAFORM
   [[ "$MOCK_FAILURE" != terraform ]]
@@ -404,6 +405,7 @@ restore
             "VERIFY_GIT",
             "S3",
             "CONFIG",
+            "LOKI_PACKAGE",
             "TERRAFORM",
             "OPERATOR_PROFILE",
             "GITHUB_ROLES",

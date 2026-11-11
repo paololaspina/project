@@ -54,6 +54,7 @@ resource "aws_iam_role_policy" "terraform_plan_readonly" {
           "ecs:DescribeTaskDefinition",
           "ecs:ListTagsForResource",
           "logs:DescribeLogGroups",
+          "logs:DescribeSubscriptionFilters",
           "logs:ListTagsForResource",
           "iam:GetRole",
           "iam:GetRolePolicy",
@@ -74,6 +75,22 @@ resource "aws_iam_role_policy" "terraform_plan_readonly" {
           "sts:GetCallerIdentity"
         ]
         Resource = "*"
+      },
+      {
+        Effect   = "Deny"
+        Action   = "ssm:GetParameter"
+        Resource = local.loki_token_arn
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "lambda:GetFunction",
+          "lambda:GetFunctionCodeSigningConfig",
+          "lambda:GetPolicy",
+          "lambda:ListTags",
+          "lambda:ListVersionsByFunction"
+        ]
+        Resource = "arn:aws:lambda:us-east-1:${data.aws_caller_identity.current.account_id}:function:${local.loki_lambda_name}"
       }
     ]
   })

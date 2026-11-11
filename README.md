@@ -37,6 +37,25 @@ bash test.sh
 
 Bei einem Sandbox-Wechsel erstellt der Restore die Rolle im neuen Konto. Danach die neue ARN in derselben Grafana-Datenquelle speichern und erneut testen.
 
+### Fargate-Logs in Grafana Cloud Loki
+
+Lambda Promtail leitet neue nginx-Einträge aus `/ecs/cicd-webserver` an Grafana Cloud Loki weiter. Der Restore lädt das festgelegte Lambda-Paket und prüft seine SHA-256-Prüfsumme. Terraform erstellt die Lambda-Funktion und den CloudWatch Subscription Filter in `us-east-1`.
+
+Vor dem ersten Restore pro Sandbox-Konto einen Grafana-Cloud-Access-Policy-Token mit `logs:write` als SecureString in AWS Systems Manager Parameter Store hinterlegen. Den Token im Bash-Terminal verdeckt eingeben.
+
+```bash
+read -rsp 'Grafana Loki Token: ' LOKI_TOKEN
+printf '\n'
+printf '%s' "$LOKI_TOKEN" |
+  jq -Rs '{Name:"/cicd-lab/grafana/loki-token",Type:"SecureString",Value:.,Overwrite:true}' |
+  aws --profile lab --region us-east-1 ssm put-parameter --cli-input-json file:///dev/stdin
+unset LOKI_TOKEN
+```
+
+Anschließend `./aws-lab-reset.sh --restore` ausführen. Die Lambda-Funktion liest den Token zur Laufzeit. Bei einem neuen AWS-Konto den SecureString vor dem Restore erneut hinterlegen.
+
+Nach dem Restore die Fargate-Webseite einmal aufrufen. In **Explore** die Loki-Datenquelle auswählen, den Zeitraum auf **Last 15 minutes** stellen und `{app="cicd-webserver", platform="fargate"}` abfragen. Die Weiterleitung beginnt bei neuen Einträgen. Bei Fehlern stehen Lambda-Meldungen in `/aws/lambda/cicd-lab-loki-forwarder`.
+
 ### Dashboard über GitHub Actions veröffentlichen
 
 Das Dashboard in `grafana/aws-lab.json` zeigt EC2-CPU sowie CPU und Arbeitsspeicher des Fargate-Dienstes. Die UID `cicd-aws-lab` bleibt bei jedem Deployment gleich.
